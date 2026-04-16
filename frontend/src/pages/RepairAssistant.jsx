@@ -186,6 +186,11 @@ export default function RepairAssistant() {
   const cleanup = () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
     if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; };
 
+  const toggleCamera = async () => {
+    if (cameraEnabled) { stopCamera(); log('CAM', 'Toggled OFF'); }
+    else { await startCamera(); log('CAM', 'Toggled ON'); }
+  };
+
   const startSession = async () => {
     try { log('SESSION', 'Starting...'); setStatus('Connecting...'); configRef.current = { persona_id: selectedPersona, voice_id: selectedVoice }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
       await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 1500)); await startMic(); await startCamera(); setVoiceState('listening'); setStatus('Listening...'); setTranscript([{ role: 'system', text: 'Session started — speak and show your device!', final: true }]); log('SESSION', 'Active');
@@ -296,8 +301,8 @@ export default function RepairAssistant() {
           <div className="ra-session-layout">
             <div className="ra-camera-section">
               <div className="ra-camera-container" data-testid="camera-container">
-                <video ref={videoRef} className="ra-camera-feed" autoPlay playsInline muted data-testid="camera-feed" />
-                {!cameraEnabled && <div className="ra-camera-placeholder">Camera loading...</div>}
+                <video ref={videoRef} className={`ra-camera-feed ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
+                {!cameraEnabled && <div className="ra-camera-placeholder">Camera is off</div>}
                 <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
                   <div className="ra-aura-ring"></div><div className="ra-aura-ring delay-1"></div><div className="ra-aura-ring delay-2"></div>
                 </div>
@@ -312,10 +317,10 @@ export default function RepairAssistant() {
               {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-title">Active Manual</div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
               {warnings.length > 0 && <div className="ra-panel ra-warnings-panel" data-testid="warnings-panel"><div className="ra-panel-title">Warnings</div>{warnings.slice(0, 3).map((w, i) => <div key={i} className="ra-warning-item">{w}</div>)}</div>}
               {steps.length > 0 && <div className="ra-panel ra-steps-panel" data-testid="steps-panel"><div className="ra-panel-title">Steps</div>{steps.map((s, i) => <div key={i} className="ra-step-item"><span className="ra-step-num">{s.step || i + 1}</span><div className="ra-step-content"><div className="ra-step-title">{s.title}</div>{s.action && <div className="ra-step-action">{s.action}</div>}</div></div>)}</div>}
-              <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
-                <div className="ra-panel-header" onClick={() => setShowTranscript(!showTranscript)}><div className="ra-panel-title">Conversation</div><span className="ra-panel-toggle">{showTranscript ? 'Hide' : 'Show'}</span></div>
-                {showTranscript && <div className="ra-transcript-messages">{transcript.map((t, i) => <div key={i} className={`ra-message ${t.role}`}><span className="ra-message-role">{t.role === 'user' ? 'YOU' : t.role === 'system' ? 'SYS' : 'AI'}</span><span className="ra-message-content">{t.text}</span></div>)}<div ref={transcriptEndRef} /></div>}
-              </div>
+              {showTranscript && <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
+                <div className="ra-panel-title">Conversation</div>
+                <div className="ra-transcript-messages">{transcript.map((t, i) => <div key={i} className={`ra-message ${t.role}`}><span className="ra-message-role">{t.role === 'user' ? 'YOU' : t.role === 'system' ? 'SYS' : 'AI'}</span><span className="ra-message-content">{t.text}</span></div>)}<div ref={transcriptEndRef} /></div>
+              </div>}
             </div>
           </div>
         )}
@@ -324,13 +329,29 @@ export default function RepairAssistant() {
       {/* Controls Bar — only during session */}
       {isConnected && (
         <div className="ra-controls-bar">
-          <div className="ra-controls-container">
-            <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-            </button>
-            <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
+          <div className="ra-controls-layout">
+            <div className="ra-controls-side left">
+              <button className={`ra-control-btn ra-control-btn-text ${showTranscript ? 'active' : ''}`} onClick={() => setShowTranscript(!showTranscript)} data-testid="transcript-toggle-button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
+              </button>
+            </div>
+            <div className="ra-controls-center">
+              <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+              </button>
+              <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+              <button className={`ra-control-btn ${cameraEnabled ? 'active' : ''}`} onClick={toggleCamera} data-testid="camera-toggle-button">
+                {cameraEnabled ? (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                ) : (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                )}
+              </button>
+            </div>
+            <div className="ra-controls-side right" />
           </div>
         </div>
       )}
