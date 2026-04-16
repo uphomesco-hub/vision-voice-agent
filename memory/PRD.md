@@ -18,7 +18,7 @@ Gemini Live API (gemini-2.5-flash-preview-native-audio-dialog)
 - **Frontend**: React 19, CSS (dark theme), browser AudioContext + getUserMedia
 - **Backend**: FastAPI, google-genai SDK (v1.71.0)
 - **Voice**: Gemini Live API (native audio dialog model)
-- **API Key**: Emergent LLM Key (GOOGLE_API_KEY)
+- **API Key**: Google API Key (direct, not Emergent proxy — Live API requires WebSocket which Emergent proxy doesn't support)
 
 ## Key API Endpoints
 - `GET /api/health` - Health check (returns model name + mode)

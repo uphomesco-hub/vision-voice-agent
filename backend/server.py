@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
-MODEL_ID = "gemini-2.5-flash-preview-native-audio-dialog"
+MODEL_ID = "gemini-2.5-flash-native-audio-latest"
 INPUT_SAMPLE_RATE = 16000
 OUTPUT_SAMPLE_RATE = 24000
 
@@ -102,6 +102,7 @@ async def voice_session(websocket: WebSocket):
         system_instruction = build_agent_prompt(persona_id, voice_id)
 
         # Connect to Gemini Live API
+        logger.info(f"Connecting to Gemini: model={MODEL_ID}, voice={voice_id}, key={'*' * 4 + GEMINI_API_KEY[-4:]}")
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         live_config = types.LiveConnectConfig(
