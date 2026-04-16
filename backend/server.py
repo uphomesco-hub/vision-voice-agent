@@ -389,9 +389,9 @@ async def ws_session(websocket: WebSocket):
                     # Frame-diff nudge: only trigger when the scene actually changes
                     curr_bytes = base64.b64decode(raw_b64)
 
-                    if prev_frame_bytes and not ai_speaking and nudge.should_nudge("vision_check", ""):
+                    if prev_frame_bytes and not ai_speaking:
                         diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
-                        if diff >= DIFF_THRESHOLD:
+                        if diff >= DIFF_THRESHOLD and nudge.should_nudge("vision_check", ""):
                             # Load step context if a manual is active
                             step_context = ""
                             async with AsyncSessionLocal() as db:
