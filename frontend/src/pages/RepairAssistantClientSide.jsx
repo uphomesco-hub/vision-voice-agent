@@ -131,40 +131,47 @@ export default function RepairAssistantClientSide() {
   };
 
   const getAIResponse = async (userMessage) => {
-    // Simple rule-based responses for demo
-    // In production, you could call Gemini API directly from browser
-    const lowerMessage = userMessage.toLowerCase();
-    
-    if (lowerMessage.includes('screen') && (lowerMessage.includes('crack') || lowerMessage.includes('broken'))) {
-      return "A cracked screen can often be repaired at a phone repair shop. Costs typically range from $100-300 depending on your device model. Would you like tips on temporary protection while you arrange repair?";
+    try {
+      // Call Gemini API directly from browser for real AI responses
+      const GEMINI_API_KEY = 'sk-emergent-e85953437393d7862A'; // Emergent Universal Key
+      const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+      
+      const systemPrompt = `You are a helpful repair assistant. The user is speaking to you about device problems. 
+Provide SHORT, conversational responses (2-3 sentences max) since this is voice interaction.
+Be practical and helpful. Ask follow-up questions to understand the issue better.`;
+
+      const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `${systemPrompt}\n\nUser: ${userMessage}\n\nAssistant:`
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 150,
+          }
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Gemini API error');
+      }
+
+      const data = await response.json();
+      const aiResponse = data.candidates[0].content.parts[0].text;
+      
+      return aiResponse;
+      
+    } catch (error) {
+      console.error('AI Error:', error);
+      // Fallback to simple response if API fails
+      return "I'm having trouble connecting right now. Could you tell me more about what's wrong with your device?";
     }
-    
-    if (lowerMessage.includes('battery') || lowerMessage.includes('charge')) {
-      return "Battery issues are common. First, try restarting your device. If the problem persists, check if any apps are draining battery in settings. Battery replacement might be needed if it's old. What device are you using?";
-    }
-    
-    if (lowerMessage.includes('slow') || lowerMessage.includes('lag')) {
-      return "Device slowness can have several causes. Try clearing cache, closing background apps, and freeing up storage space. A restart often helps too. Which device type is running slow?";
-    }
-    
-    if (lowerMessage.includes('wifi') || lowerMessage.includes('internet') || lowerMessage.includes('connection')) {
-      return "Let's troubleshoot your connection. First, try turning WiFi off and on. Then restart your router. If that doesn't work, forget the network and reconnect. Are other devices connecting successfully?";
-    }
-    
-    if (lowerMessage.includes('sound') || lowerMessage.includes('audio') || lowerMessage.includes('speaker')) {
-      return "For audio issues, check if the volume is up and not muted. Try plugging in headphones to see if speakers are the problem. Also check for debris in the speaker grille. What exactly is happening with the sound?";
-    }
-    
-    if (lowerMessage.includes('update') || lowerMessage.includes('upgrade')) {
-      return "Software updates can fix many issues. Go to Settings, look for Software Update or System Update. Make sure you're connected to WiFi and have sufficient battery. Should I guide you through the update process?";
-    }
-    
-    if (lowerMessage.includes('camera') || lowerMessage.includes('photo')) {
-      return "Camera problems can often be fixed by cleaning the lens, restarting the app, or clearing the camera app cache. What specific issue are you experiencing with the camera?";
-    }
-    
-    // Default response
-    return `I understand you're having an issue with: "${userMessage}". Could you tell me more about what's happening? What device are you using, and when did this problem start?`;
   };
 
   return (
