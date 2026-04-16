@@ -25,28 +25,28 @@ PERSONAS: List[Dict] = [
 
 VOICES: List[Dict] = [
     {
-        "id": "puck",
+        "id": "Puck",
         "name": "Puck",
         "description": "Default English voice - clear and professional"
     },
     {
-        "id": "charon",
+        "id": "Charon",
         "name": "Charon",
         "description": "Deep male voice - authoritative and confident"
     },
     {
-        "id": "kore",
+        "id": "Kore",
         "name": "Kore",
         "description": "Female voice - warm and reassuring"
     },
     {
-        "id": "breeze",
-        "name": "Breeze",
+        "id": "Aoede",
+        "name": "Aoede",
         "description": "Soft female voice - gentle and calming"
     },
     {
-        "id": "ember",
-        "name": "Ember",
+        "id": "Fenrir",
+        "name": "Fenrir",
         "description": "Energetic male voice - enthusiastic and engaging"
     }
 ]
