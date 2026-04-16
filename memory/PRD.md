@@ -22,21 +22,30 @@ Gemini Live API (gemini-2.5-flash-native-audio-latest)
 
 ### Step 2 — Vision + Manuals + Tools + Polish
 - [x] Live camera feed (JPEG frames every 2s to Gemini)
-- [x] **Welcome greeting** — assistant proactively greets on session start
-- [x] **Proactive vision** — reacts to visual changes, tracks manual steps, warns about wrong tools
-- [x] 3 seed manuals: Stihl FS 56 RC, Dyson V15 Detect, **Morphy Richards Trimmer** (rich format with repair playbooks, screws, hidden clips)
+- [x] Welcome greeting — assistant proactively greets on session start
+- [x] Proactive vision — reacts to visual changes, tracks manual steps, warns about wrong tools
+- [x] 3 seed manuals: Stihl FS 56 RC, Dyson V15 Detect, Morphy Richards Trimmer
 - [x] lookup_manual tool with Gemini function calling
 - [x] NudgeEngine with per-type cooldowns (no spam)
 - [x] UI panels: tool activity, manual, warnings, steps, transcript, search
 - [x] Voice aura animations (listening/speaking/thinking)
-- [x] **English transcription** enforced in system prompt
-- [x] **Console logging** — all events: [WS] [MIC] [CAM] [SPEECH] [TOOL] [SEARCH] [SESSION] [STATE] [ERROR]
+- [x] English transcription enforced in system prompt
+- [x] Console logging — all events
 - [x] Session persistence + snapshots + reconnect with history
+
+### Step 2.1 — UI/UX Refinements (April 16, 2026)
+- [x] Shortened AI "no manual found" fallback speech (less verbose)
+- [x] Transcript box uses full available height on desktop (removed max-height restriction)
+- [x] Camera toggle button (on/off) — stops/starts video frame capture
+- [x] Transcript toggle button (show/hide) — placed separately on the left
+- [x] Mic, End Session, Camera buttons grouped and centered
+- [x] AI prompt updated: explicitly asks user to turn on camera if off (no visual guessing)
+- [x] Shortened "NO MANUAL BEHAVIOR" prompt instruction
 
 ## Seed Manuals
 1. `stihl-fs56rc` — Stihl FS 56 RC String Trimmer
 2. `dyson-v15` — Dyson V15 Detect Cordless Vacuum
-3. `morphy-richards-trimmer-generic-v2` — Morphy Richards Trimmer (with teardown, repair playbooks, hidden screws, clips)
+3. `morphy-richards-trimmer-generic-v2` — Morphy Richards Trimmer
 
 ## Key Endpoints
 - `GET /api/health`, `GET /api/personas`, `GET /api/voices`
@@ -52,6 +61,8 @@ Gemini Live API (gemini-2.5-flash-native-audio-latest)
 - Manuals: Auto-seeded from backend/manuals/*.json
 
 ## Backlog
+- P1: Build warnings panel (dedicated)
+- P1: Build repair-step panel (dedicated)
+- P2: Mobile responsive refinements
 - P2: ML-powered scene analysis
-- P2: Mobile responsive
 - P3: Multi-user sessions
