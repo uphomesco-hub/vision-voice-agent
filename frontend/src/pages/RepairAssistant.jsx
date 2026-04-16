@@ -3,8 +3,7 @@ import { Room } from 'livekit-client';
 import axios from 'axios';
 import './RepairAssistant.css';
 
-// API calls will be relative to the same origin (backend serves frontend)
-const API = '/api';
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 export default function RepairAssistant() {
   const [personas, setPersonas] = useState([]);

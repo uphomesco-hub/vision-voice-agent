@@ -1,11 +1,10 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 import logging
-from pathlib import Path
+import asyncio
+import websockets
 
 from config import settings
 from db import get_db, init_db
@@ -114,9 +113,19 @@ async def get_session_token(
             participant_name="User"
         )
         
+        # Use external WebSocket proxy URL for browser connectivity
+        import os
+        backend_url = os.environ.get('REACT_APP_BACKEND_URL', '')
+        if backend_url:
+            # Convert https:// to wss:// for WebSocket
+            ws_url = backend_url.replace('https://', 'wss://').replace('http://', 'ws://')
+            external_livekit_url = f"{ws_url}/api/livekit-ws"
+        else:
+            external_livekit_url = settings.livekit_url
+        
         return TokenResponse(
             token=token,
-            livekit_url=settings.livekit_url,
+            livekit_url=external_livekit_url,
             room_name=session.room_name
         )
     except HTTPException:
@@ -178,40 +187,67 @@ async def end_session(
 # Include API router
 app.include_router(api_router)
 
-# Serve React build (production) or public folder (development)
-FRONTEND_BUILD = Path(__file__).parent.parent / "frontend" / "build"
-FRONTEND_PUBLIC = Path(__file__).parent.parent / "frontend" / "public"
-
-if FRONTEND_BUILD.exists():
-    # Production: serve React build
-    logger.info(f"Serving React build from {FRONTEND_BUILD}")
+# WebSocket proxy for LiveKit signaling
+@app.websocket("/api/livekit-ws/{path:path}")
+async def livekit_ws_proxy(websocket: WebSocket, path: str = ""):
+    """Proxy WebSocket connections to local LiveKit server"""
+    await websocket.accept()
     
-    @app.get("/repair")
-    async def serve_repair_app():
-        """Serve the React app for /repair route"""
-        return FileResponse(FRONTEND_BUILD / "index.html")
+    # Forward query params and path to local LiveKit
+    query_string = websocket.scope.get("query_string", b"").decode()
+    livekit_ws_url = f"ws://localhost:7880/{path}"
+    if query_string:
+        livekit_ws_url += f"?{query_string}"
     
-    @app.get("/")
-    async def serve_root():
-        """Serve the React app root"""
-        return FileResponse(FRONTEND_BUILD / "index.html")
+    logger.info(f"LiveKit WS proxy connecting to: {livekit_ws_url}")
     
-    # Mount static files from build
-    app.mount("/static", StaticFiles(directory=FRONTEND_BUILD / "static"), name="static")
-    app.mount("/", StaticFiles(directory=FRONTEND_BUILD, html=True), name="frontend")
-    
-else:
-    # Development: serve from public folder
-    logger.info(f"Serving from public folder: {FRONTEND_PUBLIC}")
-    
-    @app.get("/")
-    async def serve_index():
-        """Serve the main HTML page"""
-        return FileResponse(FRONTEND_PUBLIC / "index.html")
-    
-    # Mount static files
-    if FRONTEND_PUBLIC.exists():
-        app.mount("/static", StaticFiles(directory=FRONTEND_PUBLIC), name="static")
+    try:
+        async with websockets.connect(
+            livekit_ws_url,
+            additional_headers={},
+            max_size=None,
+            ping_interval=None
+        ) as lk_ws:
+            async def forward_to_livekit():
+                try:
+                    while True:
+                        data = await websocket.receive()
+                        if "text" in data:
+                            await lk_ws.send(data["text"])
+                        elif "bytes" in data:
+                            await lk_ws.send(data["bytes"])
+                except WebSocketDisconnect:
+                    pass
+                except Exception:
+                    pass
+            
+            async def forward_to_client():
+                try:
+                    async for message in lk_ws:
+                        if isinstance(message, bytes):
+                            await websocket.send_bytes(message)
+                        else:
+                            await websocket.send_text(message)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+                except Exception:
+                    pass
+            
+            # Run both directions concurrently
+            done, pending = await asyncio.wait(
+                [asyncio.create_task(forward_to_livekit()), asyncio.create_task(forward_to_client())],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+                
+    except Exception as e:
+        logger.error(f"LiveKit WS proxy error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
