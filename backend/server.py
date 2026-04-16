@@ -33,8 +33,8 @@ GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativ
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
-DIFF_THRESHOLD = 22.0
-DIFF_COOLDOWN_FRAMES = 3
+DIFF_THRESHOLD = 14.0
+DIFF_COOLDOWN_FRAMES = 2
 
 def compute_frame_diff(prev_bytes, curr_bytes):
     """Compare two JPEG blobs as tiny grayscale thumbnails. Returns mean pixel diff 0-255."""
