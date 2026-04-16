@@ -470,17 +470,25 @@ async def ws_session(websocket: WebSocket):
                                         "device_state": obs.get("device_state", ""),
                                         "visible_features": obs.get("visible_features", []),
                                         "changed_vs_prior": changes,
+                                        "focus_area": obs.get("focus_area", ""),
                                         "safety_concern": safety,
                                     }, ensure_ascii=False)
 
-                                    nudge_text = (
-                                        f"[VISION_UPDATE] {obs_summary}\n"
-                                        f"These are VERIFIED visible facts from the current frame.{step_context}\n"
-                                        "Narrate the change in one short natural sentence — use ONLY facts from this update. "
-                                        "Do NOT add details not in this update. Do NOT claim actions (removed/installed); "
-                                        "describe current state only. If safety_concern is non-empty, interrupt immediately about that. "
-                                        "If changed_vs_prior is empty, stay silent."
-                                    )
+                                    if safety:
+                                        nudge_text = (
+                                            f"[SAFETY_ALERT: {safety}] Look at the current frame and warn the user about this specific concern right now, in one sentence."
+                                        )
+                                    else:
+                                        nudge_text = (
+                                            f"[VISION_UPDATE] Verified facts from a grounded visual observer:\n{obs_summary}\n\n"
+                                            f"Now LOOK at the current camera frame yourself.{step_context}\n"
+                                            "Describe what you see in one short natural sentence — speak from your own eyes, "
+                                            "but use the verified facts above as guardrails. "
+                                            "If focus_area is given, direct your attention there first. "
+                                            "Never contradict the verified facts. Never claim user actions (no 'removed', 'installed'); "
+                                            "describe current state only. If safety_concern is non-empty, interrupt immediately about that. "
+                                            "Do not read the JSON aloud — use it as reference, narrate naturally."
+                                        )
 
                                     await gemini_ws.send(json.dumps({
                                         "clientContent": {
