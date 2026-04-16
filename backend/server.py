@@ -33,8 +33,8 @@ GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativ
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
-DIFF_THRESHOLD = 14.0
-DIFF_COOLDOWN_FRAMES = 2
+DIFF_THRESHOLD = 12.0
+DIFF_COOLDOWN_FRAMES = 1
 
 def compute_frame_diff(prev_bytes, curr_bytes):
     """Compare two JPEG blobs as tiny grayscale thumbnails. Returns mean pixel diff 0-255."""
@@ -426,16 +426,18 @@ async def ws_session(websocket: WebSocket):
                                     confidence = float(obs.get("confidence", 0) or 0)
                                     changes = obs.get("changed_vs_prior", []) or []
                                     safety = (obs.get("safety_concern") or "").strip()
+                                    is_first_obs = ps["last_perception"] is None
 
                                     # Skip if low confidence or nothing new (safety always passes)
-                                    if not safety and (confidence < 0.5 or not changes) and sig == ps["last_perception_sig"]:
+                                    # BUT: if this is the first observation, treat it as a change so AI reacts to device appearing
+                                    if not safety and not is_first_obs and (confidence < 0.5 or not changes) and sig == ps["last_perception_sig"]:
                                         logger.info(f"[{_snap_sid}] perception stable (conf={confidence:.2f}), no narration")
                                         await _ws_send({
                                             "type": "vision.perception", "status": "stable",
                                             "confidence": confidence, "device_state": obs.get("device_state", ""), "diff": round(_snap_diff, 1),
                                         })
                                         return
-                                    if not safety and (confidence < 0.5 or not changes):
+                                    if not safety and not is_first_obs and (confidence < 0.5 or not changes):
                                         if confidence >= 0.5:
                                             ps["last_perception"] = obs
                                             ps["last_perception_sig"] = sig
@@ -446,8 +448,7 @@ async def ws_session(websocket: WebSocket):
                                         })
                                         return
 
-                                    # Good observation with changes — update prior
-                                    # Good observation with changes — update prior
+                                    # First observation or real changes — update prior and send to Live
                                     if confidence >= 0.5:
                                         ps["last_perception"] = obs
                                         ps["last_perception_sig"] = sig

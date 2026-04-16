@@ -20,11 +20,11 @@ DEFAULT_COOLDOWNS = {
     "internals_visible": 30,
     "angle_hint": 90,  # Very slow — don't nag about framing
     "label_text_change": 20,
-    "vision_check": 8,  # Frequent with Flash — grounded, no hallucination risk
+    "vision_check": 5,  # Fast nudges with Flash grounding
 }
 
 # Grace period after user speaks before allowing visual nudges (seconds)
-USER_SPEECH_GRACE = 3
+USER_SPEECH_GRACE = 2
 
 
 class NudgeEngine:
