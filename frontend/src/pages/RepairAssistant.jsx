@@ -13,7 +13,7 @@ export default function RepairAssistant() {
   const [selectedVoice, setSelectedVoice] = useState('Puck');
   const [isConnected, setIsConnected] = useState(false);
   const [isMicEnabled, setIsMicEnabled] = useState(false);
-  const [voiceState, setVoiceState] = useState('idle'); // idle, listening, thinking, speaking
+  const [voiceState, setVoiceState] = useState('idle');
   const [status, setStatus] = useState('Ready');
   const [transcript, setTranscript] = useState([]);
 
@@ -24,10 +24,14 @@ export default function RepairAssistant() {
   const audioQueueRef = useRef([]);
   const isPlayingRef = useRef(false);
   const playbackCtxRef = useRef(null);
+  const heartbeatRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const sessionActiveRef = useRef(false); // true = user wants session active
+  const configRef = useRef(null); // stores config for reconnects
 
   useEffect(() => {
     loadData();
-    return () => { endSession(); };
+    return () => { sessionActiveRef.current = false; cleanup(); };
   }, []);
 
   const loadData = async () => {
@@ -60,44 +64,39 @@ export default function RepairAssistant() {
   const drainAudioQueue = async () => {
     if (isPlayingRef.current) return;
     isPlayingRef.current = true;
-
     if (!playbackCtxRef.current) {
       playbackCtxRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
     }
     const ctx = playbackCtxRef.current;
-
     while (audioQueueRef.current.length > 0) {
       const bytes = audioQueueRef.current.shift();
       const samples = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
       const floats = new Float32Array(samples.length);
       for (let i = 0; i < samples.length; i++) floats[i] = samples[i] / 32768;
-
       const buf = ctx.createBuffer(1, floats.length, 24000);
       buf.getChannelData(0).set(floats);
       const source = ctx.createBufferSource();
       source.buffer = buf;
       source.connect(ctx.destination);
-
-      await new Promise(resolve => {
-        source.onended = resolve;
-        source.start();
-      });
+      await new Promise(resolve => { source.onended = resolve; source.start(); });
     }
     isPlayingRef.current = false;
   };
 
-  // --- WebSocket Handlers ---
+  // --- WebSocket Message Handler ---
   const handleWsMessage = useCallback((event) => {
     try {
       const msg = JSON.parse(event.data);
-
+      if (msg.type === 'heartbeat') return; // silent
       if (msg.type === 'status') {
+        console.log('[Session]', msg.message);
         setStatus(msg.message);
       } else if (msg.type === 'audio') {
         setVoiceState('speaking');
         setStatus('Assistant speaking...');
         playAudioChunk(msg.data);
       } else if (msg.type === 'transcription') {
+        console.log(`[Transcript] ${msg.role}: ${msg.text}`);
         setTranscript(prev => {
           const last = prev[prev.length - 1];
           if (last && last.role === msg.role && !last.final) {
@@ -106,9 +105,9 @@ export default function RepairAssistant() {
           return [...prev, { role: msg.role, text: msg.text, final: false }];
         });
       } else if (msg.type === 'turn_complete') {
+        console.log('[Session] Turn complete — listening');
         setVoiceState('listening');
         setStatus('Listening...');
-        // Mark last transcript as final
         setTranscript(prev => {
           if (prev.length === 0) return prev;
           const last = prev[prev.length - 1];
@@ -119,34 +118,95 @@ export default function RepairAssistant() {
         setVoiceState('listening');
         setStatus('Listening...');
       } else if (msg.type === 'error') {
-        console.error('Server error:', msg.message);
-        if (msg.message.includes('disconnected') || msg.message.includes('session ended')) {
-          setStatus('Session ended — click Start Session to reconnect');
-          setVoiceState('idle');
-          setIsConnected(false);
-          stopMicCapture();
-        } else {
-          setStatus('Error: ' + msg.message);
-        }
+        console.error('[Session] Error:', msg.message);
+        setStatus('Error: ' + msg.message);
       }
     } catch (e) {
       console.error('WS message parse error:', e);
     }
   }, [playAudioChunk]);
 
+  // --- WebSocket Connect (with auto-reconnect) ---
+  const connectWebSocket = useCallback(() => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${WS_BASE}/api/ws/session`);
+      wsRef.current = ws;
+
+      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
+
+      ws.onopen = () => {
+        clearTimeout(timeout);
+        console.log('[WS] Connected');
+        // Send config
+        const config = configRef.current;
+        ws.send(JSON.stringify({
+          type: 'config',
+          persona_id: config.persona_id,
+          voice_id: config.voice_id,
+        }));
+        // Start heartbeat every 20s
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+        heartbeatRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+          }
+        }, 20000);
+        resolve(ws);
+      };
+
+      ws.onmessage = handleWsMessage;
+
+      ws.onclose = (event) => {
+        console.log(`[WS] Closed: code=${event.code}, clean=${event.wasClean}`);
+        if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+
+        // Auto-reconnect if session is supposed to be active
+        if (sessionActiveRef.current) {
+          console.log('[WS] Auto-reconnecting in 1s...');
+          setStatus('Reconnecting...');
+          setVoiceState('idle');
+          reconnectTimerRef.current = setTimeout(() => {
+            if (!sessionActiveRef.current) return;
+            connectWebSocket().then((newWs) => {
+              console.log('[WS] Reconnected successfully');
+              setVoiceState('listening');
+              setStatus('Listening...');
+              setTranscript(prev => [...prev, { role: 'system', text: '(Reconnected)', final: true }]);
+            }).catch((err) => {
+              console.error('[WS] Reconnect failed:', err);
+              setStatus('Reconnection failed — click Start Session');
+              setIsConnected(false);
+              sessionActiveRef.current = false;
+              stopMicCapture();
+            });
+          }, 1000);
+        } else {
+          setIsConnected(false);
+          setVoiceState('idle');
+          setStatus('Ready');
+        }
+      };
+
+      ws.onerror = (event) => {
+        console.error('[WS] Error:', event);
+        clearTimeout(timeout);
+        reject(new Error('WebSocket error'));
+      };
+    });
+  }, [handleWsMessage]);
+
   // --- Mic Capture ---
   const startMicCapture = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      });
       streamRef.current = stream;
-
       const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = ctx;
-
       const source = ctx.createMediaStreamSource(stream);
-      // Use 8192 buffer (~512ms chunks) to reduce message frequency
       const processor = ctx.createScriptProcessor(8192, 1, 1);
-      
+
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const input = e.inputBuffer.getChannelData(0);
@@ -154,19 +214,16 @@ export default function RepairAssistant() {
         for (let i = 0; i < input.length; i++) {
           pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
         }
-        const b64 = uint8ArrayToBase64(new Uint8Array(pcm16.buffer));
         try {
-          wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
-        } catch (err) {
-          console.error('Error sending audio:', err);
-        }
+          wsRef.current.send(JSON.stringify({ type: 'audio', data: uint8ArrayToBase64(new Uint8Array(pcm16.buffer)) }));
+        } catch (err) { /* ignore send errors during reconnect */ }
       };
 
       source.connect(processor);
       processor.connect(ctx.destination);
       workletNodeRef.current = processor;
-
       setIsMicEnabled(true);
+      console.log('[Mic] Capture started');
     } catch (e) {
       console.error('Mic capture error:', e);
       throw e;
@@ -180,41 +237,32 @@ export default function RepairAssistant() {
     setIsMicEnabled(false);
   };
 
+  const cleanup = () => {
+    if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
+    if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'end' }));
+      wsRef.current.close();
+    }
+    wsRef.current = null;
+    stopMicCapture();
+    audioQueueRef.current = [];
+    if (playbackCtxRef.current) { playbackCtxRef.current.close(); playbackCtxRef.current = null; }
+  };
+
   // --- Session Control ---
   const startSession = async () => {
     try {
-      setStatus('Requesting microphone...');
-      
-      // Open WebSocket
       setStatus('Connecting...');
-      const ws = new WebSocket(`${WS_BASE}/api/ws/session`);
-      wsRef.current = ws;
+      configRef.current = { persona_id: selectedPersona, voice_id: selectedVoice };
+      sessionActiveRef.current = true;
 
-      await new Promise((resolve, reject) => {
-        ws.onopen = resolve;
-        ws.onerror = () => reject(new Error('WebSocket connection failed'));
-        setTimeout(() => reject(new Error('Connection timeout')), 10000);
-      });
-
-      ws.onmessage = handleWsMessage;
-      ws.onclose = () => {
-        setIsConnected(false);
-        setVoiceState('idle');
-        setStatus('Disconnected');
-        stopMicCapture();
-      };
-
-      // Send config
-      ws.send(JSON.stringify({
-        type: 'config',
-        persona_id: selectedPersona,
-        voice_id: selectedVoice,
-      }));
+      await connectWebSocket();
 
       setIsConnected(true);
       setStatus('Connecting to Gemini Live...');
 
-      // Wait briefly for Gemini connection, then start mic
+      // Wait for Gemini to connect, then start mic
       await new Promise(r => setTimeout(r, 1500));
       await startMicCapture();
 
@@ -224,6 +272,7 @@ export default function RepairAssistant() {
 
     } catch (e) {
       console.error('Start session error:', e);
+      sessionActiveRef.current = false;
       let msg = e.message;
       if (msg.includes('Permission denied') || msg.includes('NotAllowedError')) {
         msg = 'Microphone access denied. Please allow microphone permissions.';
@@ -235,18 +284,13 @@ export default function RepairAssistant() {
   };
 
   const endSession = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'end' }));
-      wsRef.current.close();
-    }
-    wsRef.current = null;
-    stopMicCapture();
-    audioQueueRef.current = [];
-    if (playbackCtxRef.current) { playbackCtxRef.current.close(); playbackCtxRef.current = null; }
+    sessionActiveRef.current = false;
+    cleanup();
     setIsConnected(false);
     setIsMicEnabled(false);
     setVoiceState('idle');
     setStatus('Ready');
+    setTranscript([]);
   };
 
   const toggleMicrophone = () => {
@@ -290,7 +334,6 @@ export default function RepairAssistant() {
                 <h2 className="ra-setup-title">Voice Troubleshooting</h2>
                 <p className="ra-setup-subtitle">Talk naturally with your AI repair assistant powered by Gemini Live</p>
               </div>
-
               <div className="ra-setup-options">
                 <div className="ra-option-group">
                   <label className="ra-option-label">Assistant Personality</label>
@@ -305,7 +348,6 @@ export default function RepairAssistant() {
                   </select>
                 </div>
               </div>
-
               <button className="ra-btn-primary" onClick={startSession} data-testid="start-session-button">
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                 Start Session
@@ -322,7 +364,6 @@ export default function RepairAssistant() {
               </div>
               <div className="ra-voice-status-text" data-testid="voice-status-text">{status}</div>
             </div>
-
             <div className="ra-transcript-container">
               <div className="ra-transcript-header">
                 <h3 className="ra-transcript-title">Conversation</h3>

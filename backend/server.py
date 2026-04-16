@@ -218,6 +218,11 @@ async def voice_session(websocket: WebSocket):
                     }
                     await gemini_ws.send(json.dumps(audio_msg))
 
+                elif msg_type == "heartbeat":
+                    # Keep-alive from client — just echo back
+                    await websocket.send_json({"type": "heartbeat"})
+
+
                 elif msg_type == "video":
                     if not session_alive:
                         break
