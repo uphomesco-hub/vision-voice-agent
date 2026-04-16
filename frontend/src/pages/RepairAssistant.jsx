@@ -232,36 +232,26 @@ export default function RepairAssistant() {
         {!isConnected ? (
           /* ═══ SETUP PAGE ═══ */
           <div className="ra-setup-page">
-            {/* Step 1: Personality */}
-            <section className="ra-step-section">
-              <div className="ra-step-label">STEP 01</div>
-              <h2 className="ra-step-heading">Select Personality</h2>
-              <p className="ra-step-desc">Choose the behavioral style of your repair assistant.</p>
-
-              {/* Desktop: Grid */}
+            <section className="ra-personality-section">
+              <h2 className="ra-section-heading">Select Personality</h2>
               <div className="ra-persona-grid">
                 {personas.map(p => (
                   <div key={p.id} className={`ra-persona-card ${selectedPersona === p.id ? 'selected' : ''}`}
                     onClick={() => setSelectedPersona(p.id)} data-testid={`persona-card-${p.id}`}>
                     {selectedPersona === p.id && <div className="ra-persona-check">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
                     </div>}
-                    <div className="ra-persona-avatar">
-                      <img src={p.avatar} alt={p.name} />
-                    </div>
+                    <div className="ra-persona-avatar"><img src={p.avatar} alt={p.name} /></div>
                     <h3 className="ra-persona-name">{p.name}</h3>
                     <span className="ra-persona-trait">{p.trait}</span>
                     <p className="ra-persona-desc">{p.description}</p>
                   </div>
                 ))}
               </div>
-
-              {/* Mobile: Swipe Carousel */}
               <div className="ra-persona-carousel" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
                 <div className="ra-carousel-track" style={{ transform: `translateX(${-mobileCardIndex * 85}%)` }}>
                   {personas.map((p, i) => (
-                    <div key={p.id} className={`ra-carousel-card ${i === mobileCardIndex ? 'active' : ''}`}
-                      onClick={() => { setMobileCardIndex(i); setSelectedPersona(p.id); }}>
+                    <div key={p.id} className={`ra-carousel-card ${i === mobileCardIndex ? 'active' : ''}`} onClick={() => { setMobileCardIndex(i); setSelectedPersona(p.id); }}>
                       <div className="ra-carousel-img"><img src={p.avatar} alt={p.name} /></div>
                       <span className="ra-carousel-trait">{p.trait}</span>
                       <h3 className="ra-carousel-name">{p.name}</h3>
@@ -269,31 +259,24 @@ export default function RepairAssistant() {
                     </div>
                   ))}
                 </div>
-                <div className="ra-carousel-dots">
-                  {personas.map((_, i) => <span key={i} className={`ra-dot ${i === mobileCardIndex ? 'active' : ''}`} />)}
-                </div>
+                <div className="ra-carousel-dots">{personas.map((_, i) => <span key={i} className={`ra-dot ${i === mobileCardIndex ? 'active' : ''}`} />)}</div>
               </div>
             </section>
 
-            {/* Step 2: Voice */}
-            <section className="ra-step-section">
-              <div className="ra-step-label">STEP 02</div>
-              <h2 className="ra-step-heading">Choose Voice</h2>
-
+            <section className="ra-voice-section">
+              <h2 className="ra-section-heading">Choose Voice</h2>
               <div className="ra-voice-list">
                 {voices.map(v => (
                   <div key={v.id} className={`ra-voice-row ${selectedVoice === v.id ? 'selected' : ''}`}
                     onClick={() => setSelectedVoice(v.id)} data-testid={`voice-row-${v.id}`}>
                     <div className="ra-voice-play">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21"/></svg>
                     </div>
                     <div className="ra-voice-info">
                       <div className="ra-voice-name">{v.name}</div>
-                      <div className="ra-voice-trait">{v.trait}</div>
+                      <div className="ra-voice-meta">{v.gender} &middot; {v.trait}</div>
                     </div>
-                    <div className="ra-voice-wave">
-                      {[1,2,3,4,5].map(i => <div key={i} className="ra-wave-line" />)}
-                    </div>
+                    <div className="ra-voice-wave">{[1,2,3,4,5].map(i => <div key={i} className="ra-wave-line" />)}</div>
                     <div className={`ra-voice-radio ${selectedVoice === v.id ? 'checked' : ''}`}>
                       {selectedVoice === v.id && <div className="ra-radio-dot" />}
                     </div>
@@ -302,11 +285,10 @@ export default function RepairAssistant() {
               </div>
             </section>
 
-            {/* Initialize Button */}
             <div className="ra-init-section">
               <button className="ra-btn-init" onClick={startSession} data-testid="start-session-button">
                 Initialize Session
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
             </div>
           </div>
@@ -340,16 +322,19 @@ export default function RepairAssistant() {
         )}
       </main>
 
-      <div className="ra-controls-bar">
-        <div className="ra-controls-container">
-          <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-          </button>
-          {isConnected && <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>}
+      {/* Controls Bar — only during session */}
+      {isConnected && (
+        <div className="ra-controls-bar">
+          <div className="ra-controls-container">
+            <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+            </button>
+            <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
