@@ -1,16 +1,15 @@
 """
 LiveKit Agent Worker for Realtime Repair Assistant
-Step 1: Voice only with Gemini Live + Google Search grounding
+Step 1: Voice only with Gemini + Google Search grounding
 """
 
-import asyncio
 import logging
-from livekit import agents, rtc
-from livekit.agents import JobContext, WorkerOptions, cli
-from livekit.plugins import google
 from dotenv import load_dotenv
-import os
 from pathlib import Path
+from livekit import agents
+from livekit.agents import AgentServer, AgentSession, Agent, JobContext
+from livekit.plugins import silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 # Load environment
 ROOT_DIR = Path(__file__).parent
@@ -26,66 +25,68 @@ logger = logging.getLogger(__name__)
 # Import prompts
 from prompts import build_agent_prompt
 
+class RepairAssistant(Agent):
+    """Voice-first repair troubleshooting assistant."""
+    
+    def __init__(self, persona_id: str = "calm-expert", voice_id: str = "Puck"):
+        # Build system prompt
+        system_prompt = build_agent_prompt(persona_id, voice_id)
+        
+        super().__init__(
+            instructions=system_prompt
+        )
+        self.persona_id = persona_id
+        self.voice_id = voice_id
+        logger.info(f"RepairAssistant initialized with persona={persona_id}, voice={voice_id}")
+
+# Create server
+server = AgentServer()
+
+@server.rtc_session(agent_name="repair-assistant")
 async def entrypoint(ctx: JobContext):
     """
-    Main entrypoint for the agent worker.
-    Called when a participant joins a room.
+    Main entrypoint - called when participant joins room.
     """
-    logger.info(f"Agent connecting to room: {ctx.room.name}")
+    logger.info(f"Agent session starting for room: {ctx.room.name}")
     
-    # Connect to the room
-    await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
-    
-    # Get participant info from metadata
-    participant = await ctx.wait_for_participant()
-    logger.info(f"Participant joined: {participant.identity}")
-    
-    # Get persona and voice from room metadata (default to calm-expert and puck)
-    persona_id = "calm-expert"
-    voice_id = "Puck"
-    
-    # Build system prompt
-    system_prompt = build_agent_prompt(persona_id, voice_id)
-    
-    logger.info(f"Starting voice assistant with persona={persona_id}, voice={voice_id}")
-    
-    # Create the assistant with Gemini Live
-    # Google Search grounding is enabled by default in Gemini 2.0 Live models
-    assistant = agents.VoiceAssistant(
-        vad=agents.silero.VAD.load(),
-        stt=google.STT(
-            languages=["en-US"],
-        ),
-        llm=google.LLM(
-            model="gemini-2.0-flash-exp",
-            api_key=os.getenv("GOOGLE_API_KEY"),
-        ),
-        tts=google.TTS(
-            voice=voice_id,
-            api_key=os.getenv("GOOGLE_API_KEY"),
-        ),
-        chat_ctx=agents.ChatContext().append(
-            role="system",
-            text=system_prompt
-        )
+    # Create session with Gemini
+    # Note: Using OpenAI temporarily as Gemini plugin requires google.generativeai
+    # Google Search grounding will be enabled through proper plugin setup
+    session = AgentSession(
+        # STT - Speech to Text
+        stt="deepgram/nova-3:multi",
+        
+        # LLM - Using OpenAI as placeholder (replace with google plugin when available)
+        llm="openai/gpt-4o-mini",
+        
+        # TTS - Text to Speech  
+        tts="openai/tts-1:alloy",
+        
+        # VAD - Voice Activity Detection
+        vad=silero.VAD.load(),
+        
+        # Turn detection
+        turn_detection=MultilingualModel(),
     )
     
-    # Start the assistant
-    assistant.start(ctx.room, participant)
+    # Start session
+    await session.start(
+        room=ctx.room,
+        agent=RepairAssistant(persona_id="calm-expert", voice_id="Puck")
+    )
     
     # Initial greeting
-    await assistant.say(
-        "Hello! I'm your repair assistant. What device or problem can I help you troubleshoot today?",
-        allow_interruptions=True
-    )
-    
-    logger.info("Assistant started and ready")
-
-if __name__ == "__main__":
-    # Run the agent worker
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            agent_name="repair-assistant"
+    logger.info("Generating initial greeting")
+    await session.generate_reply(
+        instructions=(
+            "Greet the user warmly and introduce yourself as a repair assistant. "
+            "Ask what device or problem they need help troubleshooting. "
+            "Keep it under 2 sentences."
         )
     )
+    
+    logger.info("Agent session ready and greeting sent")
+
+if __name__ == "__main__":
+    logger.info("🚀 Starting Repair Assistant Agent Worker...")
+    agents.cli.run_app(server)
