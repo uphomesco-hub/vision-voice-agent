@@ -10,6 +10,7 @@ import base64
 import io
 import websockets
 from datetime import datetime, timezone
+from typing import Optional, Dict, Any
 from PIL import Image
 
 from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
@@ -17,6 +18,7 @@ from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
 from nudge_engine import NudgeEngine
+from vision_perception import perceive_scene, observation_signature
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -145,6 +147,8 @@ async def ws_session(websocket: WebSocket):
     prev_frame_bytes = None
     nudge = NudgeEngine()
     ai_speaking = False
+    last_perception: Optional[Dict[str, Any]] = None
+    last_perception_sig: str = ""
     intentional_end = False
 
     try:
@@ -392,29 +396,65 @@ async def ws_session(websocket: WebSocket):
                     if prev_frame_bytes and not ai_speaking:
                         diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
                         if diff >= DIFF_THRESHOLD and nudge.should_nudge("vision_check", ""):
-                            # Load step context if a manual is active
-                            step_context = ""
-                            async with AsyncSessionLocal() as db:
-                                sess = await SessionStore.get_session(db, session_id)
-                                if sess and sess.active_manual_id:
-                                    manual = await get_manual_by_id(db, sess.active_manual_id)
-                                    if manual:
-                                        step_num = sess.current_step or 0
-                                        teardown = manual.get("teardown", {})
-                                        steps_list = teardown.get("steps", []) if isinstance(teardown, dict) else []
-                                        if steps_list and step_num < len(steps_list):
-                                            current = steps_list[step_num]
-                                            step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
+                            # ─── STAGE 1: cold perception via Flash ───
+                            obs = await perceive_scene(raw_b64, prior_obs=last_perception)
+                            if obs is None:
+                                logger.info(f"[{session_id}] perception failed, skipping nudge")
+                            else:
+                                sig = observation_signature(obs)
+                                confidence = float(obs.get("confidence", 0) or 0)
+                                changes = obs.get("changed_vs_prior", []) or []
+                                safety = (obs.get("safety_concern") or "").strip()
 
-                            nudge_text = f"[OBSERVE] One short sentence about a SPECIFIC new visible feature in the current frame.{step_context} If nothing new is clearly visible, output NOTHING — no acknowledgment, no 'nothing changed', no meta-comment. Silence is a valid response. Name a concrete visible feature or stay silent."
+                                # Skip if low confidence or nothing new (safety always passes)
+                                if not safety and (confidence < 0.5 or not changes) and sig == last_perception_sig:
+                                    logger.info(f"[{session_id}] perception stable (conf={confidence:.2f}), no narration")
+                                elif not safety and (confidence < 0.5 or not changes):
+                                    last_perception = obs
+                                    last_perception_sig = sig
+                                    logger.info(f"[{session_id}] perception: no new changes")
+                                else:
+                                    last_perception = obs
+                                    last_perception_sig = sig
 
-                            await gemini_ws.send(json.dumps({
-                                "clientContent": {
-                                    "turns": [{"role": "user", "parts": [{"text": nudge_text}]}],
-                                    "turnComplete": True
-                                }
-                            }))
-                            logger.info(f"[{session_id}] Scene change detected (diff={diff:.1f}), nudge sent")
+                                    # Build step context if a manual is active
+                                    step_context = ""
+                                    async with AsyncSessionLocal() as db:
+                                        sess = await SessionStore.get_session(db, session_id)
+                                        if sess and sess.active_manual_id:
+                                            manual = await get_manual_by_id(db, sess.active_manual_id)
+                                            if manual:
+                                                step_num = sess.current_step or 0
+                                                teardown = manual.get("teardown", {})
+                                                steps_list = teardown.get("steps", []) if isinstance(teardown, dict) else []
+                                                if steps_list and step_num < len(steps_list):
+                                                    current = steps_list[step_num]
+                                                    step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
+
+                                    # ─── STAGE 2: inject verified facts into Live model ───
+                                    obs_summary = json.dumps({
+                                        "device_state": obs.get("device_state", ""),
+                                        "visible_features": obs.get("visible_features", []),
+                                        "changed_vs_prior": changes,
+                                        "safety_concern": safety,
+                                    }, ensure_ascii=False)
+
+                                    nudge_text = (
+                                        f"[VISION_UPDATE] {obs_summary}\n"
+                                        f"These are VERIFIED visible facts from the current frame.{step_context}\n"
+                                        "Narrate the change in one short natural sentence — use ONLY facts from this update. "
+                                        "Do NOT add details not in this update. Do NOT claim actions (removed/installed); "
+                                        "describe current state only. If safety_concern is non-empty, interrupt immediately about that. "
+                                        "If changed_vs_prior is empty, stay silent."
+                                    )
+
+                                    await gemini_ws.send(json.dumps({
+                                        "clientContent": {
+                                            "turns": [{"role": "user", "parts": [{"text": nudge_text}]}],
+                                            "turnComplete": True
+                                        }
+                                    }))
+                                    logger.info(f"[{session_id}] VISION_UPDATE sent (conf={confidence:.2f}, changes={len(changes)})")
 
                     prev_frame_bytes = curr_bytes
                     if frame_count % 10 == 0:
