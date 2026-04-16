@@ -59,10 +59,17 @@ async def search_manuals(
     for m in all_manuals:
         score = 0
         jd = m.json_data or {}
+        # Support both manual formats
+        aliases = jd.get("aliases", [])
+        issue_kw = jd.get("issue_keywords", [])
+        search_text = jd.get("search_text", "")
+        # Build searchable text from all available fields
         searchable = " ".join([
             m.brand, m.model, m.device_type, m.title,
-            " ".join(jd.get("aliases", [])),
-            " ".join(jd.get("issue_keywords", [])),
+            " ".join(aliases),
+            " ".join(issue_kw),
+            search_text,
+            jd.get("summary", ""),
         ]).lower()
 
         if brand and brand.lower() in searchable:
@@ -83,6 +90,24 @@ async def search_manuals(
     results = []
     for score, m in scored[:5]:
         jd = m.json_data or {}
+        # Extract troubleshooting steps from either format
+        ts_steps = jd.get("troubleshooting_steps", [])
+        if not ts_steps and jd.get("troubleshooting"):
+            ts_steps = [{"step": i+1, "title": t.get("issue", ""), "action": "; ".join(t.get("recommended_actions", []))} for i, t in enumerate(jd["troubleshooting"])]
+        # Extract teardown steps if available
+        teardown = jd.get("teardown", {})
+        teardown_steps = teardown.get("steps", []) if isinstance(teardown, dict) else []
+        # Extract warnings from either format
+        warnings = jd.get("warnings", [])
+        if not warnings and jd.get("safety", {}).get("warnings"):
+            warnings = jd["safety"]["warnings"]
+        # Extract tools from either format
+        tools = jd.get("tools_required", [])
+        if isinstance(tools, dict):
+            tools = [t.get("name", "") + " — " + t.get("purpose", "") for t in tools.get("required", [])]
+        # Extract repair playbooks
+        playbooks = jd.get("repair_playbooks", [])
+
         results.append({
             "manual_id": m.id,
             "brand": m.brand,
@@ -90,14 +115,20 @@ async def search_manuals(
             "device_type": m.device_type,
             "title": m.title,
             "score": score,
-            "warnings": jd.get("warnings", []),
-            "troubleshooting_steps": jd.get("troubleshooting_steps", []),
-            "tools_required": jd.get("tools_required", []),
+            "summary": jd.get("summary", ""),
+            "warnings": warnings,
+            "troubleshooting_steps": ts_steps,
+            "teardown_steps": teardown_steps,
+            "tools_required": tools,
             "common_failures": jd.get("common_failures", []),
             "success_signs": jd.get("success_signs", []),
             "stop_conditions": jd.get("stop_conditions", []),
             "inspection_prompts": jd.get("inspection_prompts_for_agent", []),
             "follow_up_questions": jd.get("follow_up_questions", []),
+            "repair_playbooks": [{"issue": p.get("issue", ""), "goal": p.get("goal", ""), "steps": p.get("steps", [])} for p in playbooks[:3]],
+            "hidden_tips": [t.get("tip", "") for t in jd.get("hidden_tips", [])],
+            "screws": jd.get("screws", {}),
+            "hidden_clips": jd.get("hidden_clips", {}),
         })
 
     return results
@@ -138,14 +169,20 @@ async def lookup_manual_tool(
             "found_count": len(results),
             "selected_manual_id": selected["manual_id"] if selected else None,
             "manual_summary": f"{selected['brand']} {selected['model']} — {selected['title']}" if selected else "No manual found",
+            "summary": selected.get("summary", "") if selected else "",
             "warnings": selected["warnings"] if selected else [],
-            "troubleshooting_steps": selected["troubleshooting_steps"][:5] if selected else [],
+            "troubleshooting_steps": selected["troubleshooting_steps"][:6] if selected else [],
+            "teardown_steps": selected.get("teardown_steps", [])[:8] if selected else [],
             "tools_required": selected["tools_required"] if selected else [],
-            "inspection_prompts": selected["inspection_prompts"][:3] if selected else [],
-            "success_signs": selected["success_signs"] if selected else [],
-            "stop_conditions": selected["stop_conditions"] if selected else [],
-            "common_failures": selected["common_failures"][:3] if selected else [],
-            "follow_up_questions": selected["follow_up_questions"][:3] if selected else [],
+            "inspection_prompts": selected["inspection_prompts"][:5] if selected else [],
+            "success_signs": selected.get("success_signs", []) if selected else [],
+            "stop_conditions": selected.get("stop_conditions", []) if selected else [],
+            "common_failures": selected.get("common_failures", [])[:3] if selected else [],
+            "follow_up_questions": selected.get("follow_up_questions", [])[:3] if selected else [],
+            "repair_playbooks": selected.get("repair_playbooks", []) if selected else [],
+            "hidden_tips": selected.get("hidden_tips", []) if selected else [],
+            "screws": selected.get("screws", {}) if selected else {},
+            "hidden_clips": selected.get("hidden_clips", {}) if selected else {},
             "alternatives": [{"manual_id": r["manual_id"], "title": r["title"], "score": r["score"]} for r in results[1:3]],
         }
         tool_run.output_data = output

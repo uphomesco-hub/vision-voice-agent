@@ -1,0 +1,575 @@
+{
+  "id": "morphy-richards-trimmer-generic-v2",
+  "brand": "Morphy Richards",
+  "model": "Generic Trimmer",
+  "device_type": "trimmer",
+  "title": "Morphy Richards Trimmer Internal Repair Manual",
+  "summary": "Morphy Richards trimmer teardown and internal repair guide. This trimmer uses 3 H1 screws in total: 1 visible screw at the back and 2 hidden screws behind the front plastic hood. After removing all screws, both side clips must be unclipped to open the shell. This manual also includes a demo repair playbook for an internal cut or disconnected wire.",
+  "search_text": "Morphy Richards trimmer 3 H1 screws one visible screw at back two hidden screws behind front plastic hood front cover hidden screws side clips unclip sides open shell disassembly teardown housing opening repair manual internal wire cut disconnected wire loose wire tape fix temporary repair close shell",
+  "manual_status": "verified_from_user_teardown_plus_demo_repair",
+  "source": "internal_manual",
+  "confidence": {
+    "overall": 0.89,
+    "notes": [
+      "Housing opening details are based on user-confirmed teardown facts.",
+      "Internal wire repair flow is included as a demo-specific guided playbook.",
+      "Battery and exact PCB details are still not model-verified."
+    ]
+  },
+  "device_identity": {
+    "display_name": "Morphy Richards Trimmer",
+    "family": "grooming trimmer",
+    "variant": null,
+    "intended_use": [
+      "beard trimming",
+      "hair grooming"
+    ],
+    "model_label_location_hint": "Usually on the rear body, lower back casing, or bottom side."
+  },
+  "external_anatomy": {
+    "parts": [
+      {
+        "name": "blade head",
+        "description": "Top cutting assembly."
+      },
+      {
+        "name": "power switch",
+        "description": "Main body power switch."
+      },
+      {
+        "name": "rear housing screw",
+        "description": "Single visible screw on the back of the trimmer body."
+      },
+      {
+        "name": "front plastic hood",
+        "description": "Front cover piece hiding two internal housing screws."
+      },
+      {
+        "name": "left side seam",
+        "description": "Left housing seam retained by snap clips."
+      },
+      {
+        "name": "right side seam",
+        "description": "Right housing seam retained by snap clips."
+      },
+      {
+        "name": "internal wiring path",
+        "description": "Internal wire route between battery, switch, charging section, and motor."
+      }
+    ],
+    "visual_recognition_cues": [
+      "One screw is visible on the back side of the body.",
+      "Two screws are hidden behind the plastic hood at the front.",
+      "The shell remains locked after screw removal until side clips are released.",
+      "If opened, internal wires may be visible running between battery, motor, and charging/switch section."
+    ]
+  },
+  "tools_required": {
+    "required": [
+      {
+        "name": "H1 screwdriver",
+        "purpose": "Remove all three housing screws."
+      },
+      {
+        "name": "plastic pry tool",
+        "purpose": "Lift front plastic hood and release side clips safely."
+      }
+    ],
+    "recommended": [
+      {
+        "name": "magnetic tray",
+        "purpose": "Keep screws organized."
+      },
+      {
+        "name": "spudger",
+        "purpose": "Safer seam opening without damaging plastic."
+      },
+      {
+        "name": "electrical tape",
+        "purpose": "Temporary insulation and securing of rejoined wire ends."
+      },
+      {
+        "name": "tweezers",
+        "purpose": "Help position small wire ends carefully."
+      }
+    ],
+    "optional_for_permanent_repair": [
+      {
+        "name": "soldering iron",
+        "purpose": "Permanent wire reconnection."
+      },
+      {
+        "name": "heat shrink tubing",
+        "purpose": "Cleaner permanent insulation for repaired wire."
+      }
+    ]
+  },
+  "screws": {
+    "total_count": 3,
+    "type": "H1",
+    "driver": "H1 screwdriver",
+    "locations": [
+      {
+        "location_id": "rear_visible_1",
+        "count": 1,
+        "position": "back",
+        "visibility": "visible",
+        "details": "Single visible screw at the rear of the trimmer body."
+      },
+      {
+        "location_id": "front_hidden_1_2",
+        "count": 2,
+        "position": "front",
+        "visibility": "hidden",
+        "details": "Two hidden screws behind the front plastic hood."
+      }
+    ],
+    "notes": [
+      "Do not attempt to force open the shell before removing all 3 screws.",
+      "The two front screws are concealed by a plastic hood and must be exposed first."
+    ]
+  },
+  "hidden_clips": {
+    "present": true,
+    "locations": [
+      {
+        "side": "left",
+        "type": "snap clip",
+        "release_method": "Insert a plastic pry tool into the seam and gently release."
+      },
+      {
+        "side": "right",
+        "type": "snap clip",
+        "release_method": "Repeat after partial separation of the shell."
+      }
+    ],
+    "notes": [
+      "Side clips hold the shell even after all screws are removed.",
+      "Aggressive prying may crack the body shell."
+    ]
+  },
+  "teardown": {
+    "overview": "To open the Morphy Richards trimmer shell, first remove the 1 visible rear screw, then remove the front plastic hood to expose 2 hidden front screws, remove those screws, and finally unclip both side seams.",
+    "steps": [
+      {
+        "step": 1,
+        "title": "Power off and disconnect",
+        "instruction": "Ensure the trimmer is switched off and disconnected from charging power before starting disassembly.",
+        "risk": "low"
+      },
+      {
+        "step": 2,
+        "title": "Locate rear screw",
+        "instruction": "Identify the single visible screw at the back of the trimmer housing.",
+        "risk": "low"
+      },
+      {
+        "step": 3,
+        "title": "Remove rear screw",
+        "instruction": "Use an H1 screwdriver to remove the visible rear screw.",
+        "risk": "low"
+      },
+      {
+        "step": 4,
+        "title": "Lift front plastic hood",
+        "instruction": "Carefully lift or remove the front plastic hood using a plastic pry tool.",
+        "risk": "medium"
+      },
+      {
+        "step": 5,
+        "title": "Expose hidden screws",
+        "instruction": "Once the front hood is removed, identify the two hidden front screws.",
+        "risk": "low"
+      },
+      {
+        "step": 6,
+        "title": "Remove hidden screws",
+        "instruction": "Use the H1 screwdriver to remove both hidden front screws.",
+        "risk": "low"
+      },
+      {
+        "step": 7,
+        "title": "Release side clips",
+        "instruction": "Use a plastic pry tool along the left and right seams to unclip the shell sides.",
+        "risk": "medium"
+      },
+      {
+        "step": 8,
+        "title": "Separate shell halves",
+        "instruction": "Carefully separate the shell halves once screws and side clips are fully released.",
+        "risk": "medium"
+      }
+    ],
+    "common_errors": [
+      "Trying to open the shell before removing the 2 hidden front screws.",
+      "Using a metal tool that scratches or cracks the front hood.",
+      "Forcing the shell apart before unclipping the side latches."
+    ]
+  },
+  "internal_architecture": {
+    "known": [
+      "Housing is secured by 3 H1 screws and side clips.",
+      "Internal wiring is available for visual inspection after the shell is opened."
+    ],
+    "unknown": [
+      "Exact PCB layout",
+      "Exact charging board layout",
+      "Exact motor mounting arrangement",
+      "Exact battery chemistry and connector type"
+    ]
+  },
+  "battery": {
+    "known": false,
+    "details": null,
+    "notes": [
+      "Battery details for this specific Morphy Richards trimmer variant are not yet confirmed."
+    ],
+    "replacement_notes": [
+      "Verify battery label before replacement.",
+      "Match voltage, chemistry, dimensions, and polarity."
+    ],
+    "safety": [
+      "Do not puncture, crush, or short battery terminals.",
+      "Avoid accidental shorting while the shell is open."
+    ]
+  },
+  "motor_and_drive": {
+    "known": false,
+    "details": null,
+    "notes": [
+      "Motor and blade drive details are not yet confirmed for this variant."
+    ],
+    "likely_components": [
+      "small DC motor",
+      "blade oscillation linkage"
+    ]
+  },
+  "blade_assembly": {
+    "notes": [
+      "Blade head may remain assembled unless servicing requires deeper access.",
+      "Use caution around sharp cutting edges.",
+      "Remove loose hair before deeper inspection."
+    ]
+  },
+  "charging_and_power": {
+    "known": false,
+    "checks": [
+      "Check whether the trimmer responds during charging before opening the shell.",
+      "Inspect charging contact or port area visually after opening if power fault is suspected."
+    ]
+  },
+  "troubleshooting": [
+    {
+      "issue": "device_not_opening",
+      "symptoms": [
+        "Housing feels stuck after one screw removed.",
+        "Rear opens slightly but front remains locked.",
+        "Shell flexes but does not separate."
+      ],
+      "likely_causes": [
+        "Two hidden screws behind front hood not removed.",
+        "Side clips still holding shell."
+      ],
+      "recommended_actions": [
+        "Remove front plastic hood and check for hidden screws.",
+        "After all screws are removed, unclip both side seams."
+      ]
+    },
+    {
+      "issue": "device_not_powering_on",
+      "symptoms": [
+        "No power",
+        "No light or response",
+        "No sound or vibration"
+      ],
+      "likely_causes": [
+        "battery discharged",
+        "charging fault",
+        "internal loose connection",
+        "switch issue",
+        "motor or drive issue"
+      ],
+      "recommended_actions": [
+        "Check charging response first.",
+        "If still dead, open the shell and inspect internal wiring."
+      ]
+    },
+    {
+      "issue": "device_not_powering_internal_check",
+      "symptoms": [
+        "Device not turning on",
+        "No LED or response",
+        "No sound or vibration"
+      ],
+      "possible_internal_causes": [
+        "Disconnected internal wire",
+        "Broken wire near battery or motor",
+        "Loose connection from repeated use"
+      ],
+      "next_step": "Open housing and inspect internal wiring for loose or cut wires."
+    },
+    {
+      "issue": "loose_or_cut_internal_wire",
+      "symptoms": [
+        "Device remains dead",
+        "Visible loose wire inside housing",
+        "One wire end appears detached or broken"
+      ],
+      "likely_causes": [
+        "Mechanical stress",
+        "Repeated movement of internal wiring",
+        "Weak prior joint or partial cut"
+      ],
+      "recommended_actions": [
+        "Inspect both ends of the broken or loose wire.",
+        "Temporarily join the wire ends to confirm diagnosis.",
+        "If the trimmer powers on, secure the wire ends as a temporary fix."
+      ]
+    }
+  ],
+  "repair_playbooks": [
+    {
+      "issue": "open_housing",
+      "goal": "Safely open the trimmer shell without breaking the body.",
+      "steps": [
+        "Remove the 1 visible rear screw.",
+        "Remove the front plastic hood.",
+        "Remove the 2 hidden front screws.",
+        "Unclip both side seams.",
+        "Separate the shell."
+      ],
+      "stop_conditions": [
+        "Plastic begins whitening or cracking under force.",
+        "Shell remains locked after known screws are removed.",
+        "Front hood does not release cleanly and may still be latched."
+      ],
+      "success_signs": [
+        "All 3 screws removed.",
+        "Front hood removed cleanly.",
+        "Both side clips released.",
+        "Shell halves separate with minimal force."
+      ]
+    },
+    {
+      "issue": "shell_not_opening",
+      "goal": "Determine why the trimmer body is still stuck.",
+      "likely_causes": [
+        "One or both hidden front screws are still installed.",
+        "Front plastic hood is not fully removed.",
+        "A side clip is still engaged."
+      ],
+      "checks": [
+        "Confirm the rear screw is removed.",
+        "Confirm both front hidden screws are removed.",
+        "Inspect both side seams for remaining clip engagement."
+      ]
+    },
+    {
+      "issue": "internal_wire_disconnected",
+      "goal": "Identify and temporarily fix a disconnected internal wire to restore power.",
+      "visibility_requirement": [
+        "Trimmer shell must be opened",
+        "Internal wiring must be visible"
+      ],
+      "symptoms": [
+        "Device does not power on",
+        "No response even when charging",
+        "Loose or visibly broken wire inside housing"
+      ],
+      "likely_causes": [
+        "Wire disconnected from terminal",
+        "Wire cut due to stress or movement",
+        "Loose solder or connector point"
+      ],
+      "tools_required": [
+        "electrical tape for temporary fix",
+        "optional soldering iron for permanent fix"
+      ],
+      "steps": [
+        {
+          "step": 1,
+          "title": "Ensure safe handling",
+          "instruction": "Make sure the device is not connected to charging power before touching internal wires.",
+          "risk": "high"
+        },
+        {
+          "step": 2,
+          "title": "Locate the disconnected wire",
+          "instruction": "Visually inspect internal wiring and identify any loose or cut wire ends.",
+          "risk": "low"
+        },
+        {
+          "step": 3,
+          "title": "Prepare test connection",
+          "instruction": "Gently bring the two ends of the disconnected wire close together.",
+          "risk": "medium"
+        },
+        {
+          "step": 4,
+          "title": "Temporary contact test",
+          "instruction": "Lightly touch or hold the wire ends together to restore connection temporarily.",
+          "risk": "medium"
+        },
+        {
+          "step": 5,
+          "title": "Test device behavior",
+          "instruction": "Carefully try turning the trimmer on while maintaining contact between the wire ends to check if it starts working.",
+          "risk": "high"
+        },
+        {
+          "step": 6,
+          "title": "Confirm diagnosis",
+          "instruction": "If the trimmer powers on, confirm that the disconnected wire is the issue.",
+          "risk": "low"
+        },
+        {
+          "step": 7,
+          "title": "Temporary wire securing",
+          "instruction": "Align the wire ends properly and wrap them securely with electrical tape as a temporary fix.",
+          "risk": "medium"
+        },
+        {
+          "step": 8,
+          "title": "Final power test",
+          "instruction": "Turn on the trimmer again to confirm stable operation after the wire is secured.",
+          "risk": "medium"
+        },
+        {
+          "step": 9,
+          "title": "Prepare for reassembly",
+          "instruction": "Place the repaired wire so it does not get pinched when the shell is closed.",
+          "risk": "medium"
+        }
+      ],
+      "permanent_fix_recommendation": [
+        "For long-term reliability, solder the wire connection instead of relying only on tape.",
+        "Use proper insulation after repair."
+      ],
+      "warnings": [
+        "Never touch exposed wires while the device is connected to charging power.",
+        "Avoid letting exposed wire ends touch metal parts or other conductors.",
+        "Temporary tape repair may fail over time.",
+        "Do not pinch repaired wires during reassembly."
+      ],
+      "success_signs": [
+        "Device powers on when the wire ends are joined.",
+        "Device continues working after temporary securing."
+      ],
+      "stop_conditions": [
+        "Sparks are seen.",
+        "Wire insulation is badly burned or damaged.",
+        "The trimmer still does not respond after reconnecting the wire.",
+        "The repaired wire cannot be positioned safely inside the shell."
+      ]
+    },
+    {
+      "issue": "close_housing_after_internal_fix",
+      "goal": "Close the trimmer safely after inspection or wire repair.",
+      "steps": [
+        "Confirm the repaired wire is routed safely and not crossing a screw post or seam edge.",
+        "Align both shell halves carefully.",
+        "Press the shell together until side clips engage.",
+        "Reinstall the 2 hidden front screws.",
+        "Refit the front plastic hood.",
+        "Reinstall the 1 rear screw.",
+        "Perform a final power test."
+      ],
+      "warnings": [
+        "Do not trap the repaired wire between shell halves.",
+        "Do not overtighten screws.",
+        "Make sure the front hood sits properly before the final rear screw check."
+      ],
+      "success_signs": [
+        "Shell closes evenly.",
+        "Side clips engage cleanly.",
+        "All 3 screws are reinstalled.",
+        "Trimmer powers on after full reassembly."
+      ]
+    }
+  ],
+  "hidden_tips": [
+    {
+      "tip": "Two important screws are hidden behind the front plastic hood.",
+      "category": "disassembly"
+    },
+    {
+      "tip": "The housing is secured by side clips even after all screws are removed.",
+      "category": "disassembly"
+    },
+    {
+      "tip": "If the body is not opening, check the front again before applying more force.",
+      "category": "repair_logic"
+    },
+    {
+      "tip": "If the device is completely dead, internal wire disconnection near the battery, switch, or motor can be a possible fault point.",
+      "category": "diagnosis"
+    },
+    {
+      "tip": "Before closing the shell, make sure repaired wires are not sitting on top of clip points or screw posts.",
+      "category": "reassembly"
+    }
+  ],
+  "safety": {
+    "warnings": [
+      "Disconnect charging power before opening the shell.",
+      "Use a plastic opening tool to reduce damage risk.",
+      "Do not force the shell apart if hidden screws may still be installed.",
+      "Blade edges may be sharp.",
+      "Do not handle exposed internal wires while the trimmer is connected to charging power.",
+      "Avoid accidental shorting during internal inspection."
+    ],
+    "unplug_first": true,
+    "sharp_edge_warning": true,
+    "battery_warning": true,
+    "electrical_caution": true
+  },
+  "parts_and_replacement": {
+    "known_replaceable_areas": [
+      "housing screws",
+      "internal wire joints",
+      "blade head or attachments depending on variant"
+    ],
+    "unknowns": [
+      "official battery part number",
+      "motor part number",
+      "PCB part number"
+    ]
+  },
+  "inspection_prompts_for_agent": [
+    "If the blade head or comb is still attached and blocking access, ask the user to remove it before opening the housing.",
+    "Ask the user to show the rear screw location clearly.",
+    "Ask the user to show the front plastic hood before prying.",
+    "Ask the user to confirm both hidden front screws are removed.",
+    "Ask the user to show the side seam while unclipping.",
+    "Ask the user to show the loose wire closely from both ends.",
+    "Ask the user to hold the wire steady before confirming the temporary join.",
+    "Ask the user to show the wire routing before closing the shell.",
+    "If the user is using a screwdriver or metal tool near the plastic seam, remind them to use light pressure and avoid cracking clips."
+  ],
+  "evidence": [
+    {
+      "type": "user_confirmed",
+      "detail": "Screws are H1."
+    },
+    {
+      "type": "user_confirmed",
+      "detail": "There are 3 screws total."
+    },
+    {
+      "type": "user_confirmed",
+      "detail": "1 screw is visible at the back."
+    },
+    {
+      "type": "user_confirmed",
+      "detail": "2 screws are hidden behind a front plastic hood."
+    },
+    {
+      "type": "user_confirmed",
+      "detail": "Sides must be unclipped to open the shell."
+    },
+    {
+      "type": "demo_specific",
+      "detail": "Manual includes a demo playbook for temporarily joining and taping a cut internal wire to restore function."
+    }
+  ]
+}

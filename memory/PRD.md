@@ -17,67 +17,41 @@ Gemini Live API (gemini-2.5-flash-native-audio-latest)
 
 ### Step 1 — Voice
 - [x] Voice conversation with Gemini Live API (raw WebSocket)
-- [x] PCM16 16kHz audio in, 24kHz audio out
-- [x] Auto-reconnect (60s K8s ingress limit)
+- [x] Auto-reconnect (60s K8s limit) with history resume
 - [x] Dark theme UI, persona/voice selection
 
-### Step 2 Phase A — Camera + Vision
-- [x] Live camera feed (640x480, JPEG frames every 2s)
-- [x] Frames forwarded to Gemini realtimeInput
+### Step 2 — Vision + Manuals + Tools + Polish
+- [x] Live camera feed (JPEG frames every 2s to Gemini)
+- [x] **Welcome greeting** — assistant proactively greets on session start
+- [x] **Proactive vision** — reacts to visual changes, tracks manual steps, warns about wrong tools
+- [x] 3 seed manuals: Stihl FS 56 RC, Dyson V15 Detect, **Morphy Richards Trimmer** (rich format with repair playbooks, screws, hidden clips)
+- [x] lookup_manual tool with Gemini function calling
+- [x] NudgeEngine with per-type cooldowns (no spam)
+- [x] UI panels: tool activity, manual, warnings, steps, transcript, search
 - [x] Voice aura animations (listening/speaking/thinking)
+- [x] **English transcription** enforced in system prompt
+- [x] **Console logging** — all events: [WS] [MIC] [CAM] [SPEECH] [TOOL] [SEARCH] [SESSION] [STATE] [ERROR]
+- [x] Session persistence + snapshots + reconnect with history
 
-### Step 2 Phase B — Manuals + Tools
-- [x] Expanded DB: sessions, turns, observations, tool_runs, manuals, snapshots
-- [x] Manual repository with fuzzy search + ranking
-- [x] 2 seed manuals (Stihl FS 56 RC trimmer, Dyson V15 vacuum)
-- [x] lookup_manual tool via Gemini function calling
-- [x] Tool activity panel in UI
-- [x] Active manual, warnings, troubleshooting steps panels
-
-### Step 2 Phase C — Nudge Engine
-- [x] NudgeEngine with per-type cooldowns (safety_risk=10s, angle_hint=90s)
-- [x] User speech grace window (5s)
-- [x] Duplicate summary suppression
-- [x] SceneState structured model with state diffing
-- [x] VisionTracker for frame-by-frame analysis decisions
-
-### Step 2 Phase D — UI Polish
-- [x] Transcript drawer (toggle show/hide)
-- [x] Tool spinner animation for running tools
-- [x] Google Search queries panel
-- [x] Vision status indicator
-- [x] Session ID display in header
-- [x] Calm state transitions
-
-### Step 2 Phase E — Session Persistence + Reconnect
-- [x] Reconnect-with-history (resume_session_id in config)
-- [x] Previous conversation injected as system context on reconnect
-- [x] Active manual context restored on reconnect
-- [x] Session snapshots saved on disconnect
-- [x] Comprehensive console logging (MIC, CAM, WS, SESSION, TOOL, SPEECH, etc.)
-
-## Console Log Categories
-`[INIT]` `[DATA]` `[SESSION]` `[WS]` `[MIC]` `[CAM]` `[STATE]` `[STATUS]` `[SPEECH]` `[TURN]` `[TOOL]` `[SEARCH]` `[MANUAL]` `[WARN]` `[ERROR]` `[CLEANUP]`
+## Seed Manuals
+1. `stihl-fs56rc` — Stihl FS 56 RC String Trimmer
+2. `dyson-v15` — Dyson V15 Detect Cordless Vacuum
+3. `morphy-richards-trimmer-generic-v2` — Morphy Richards Trimmer (with teardown, repair playbooks, hidden screws, clips)
 
 ## Key Endpoints
-- `GET /api/health` — version 2.0-step2
-- `GET /api/personas` / `GET /api/voices`
+- `GET /api/health`, `GET /api/personas`, `GET /api/voices`
 - `POST /api/sessions` → {id, status}
 - `GET /api/sessions/{id}/state` → full state
 - `GET /api/sessions/{id}/logs` → turns + tool_runs
 - `POST /api/sessions/{id}/end`
 - `WS /api/ws/session` — realtime voice+vision
 
-## Testing
-- Iteration 4: 25/25 backend, 100% frontend
-- Reconnect feature tested: resume, invalid, ended sessions
-
 ## Environment
-- Google API Key: Required (GOOGLE_API_KEY in backend/.env)
+- Google API Key: GOOGLE_API_KEY in backend/.env
 - SQLite: Auto-created sessions.db
 - Manuals: Auto-seeded from backend/manuals/*.json
 
 ## Backlog
-- P2: Semantic vision ML-powered scene analysis (currently Gemini handles via frames)
-- P2: Mobile responsive layout
-- P3: Multi-user session support
+- P2: ML-powered scene analysis
+- P2: Mobile responsive
+- P3: Multi-user sessions
