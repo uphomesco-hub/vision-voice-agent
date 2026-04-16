@@ -16,6 +16,7 @@ from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
 from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
+from nudge_engine import NudgeEngine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -142,7 +143,7 @@ async def ws_session(websocket: WebSocket):
     session_id = None
     frame_count = 0
     prev_frame_bytes = None
-    frames_since_nudge = 999  # Start high so first change triggers
+    nudge = NudgeEngine()
     ai_speaking = False
     intentional_end = False
 
@@ -295,6 +296,7 @@ async def ws_session(websocket: WebSocket):
                         itx = sc.get("inputTranscription")
                         if itx and itx.get("text"):
                             user_buf += itx["text"]
+                            nudge.user_spoke()
                             await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
 
                         # Output transcription
@@ -386,15 +388,29 @@ async def ws_session(websocket: WebSocket):
 
                     # Frame-diff nudge: only trigger when the scene actually changes
                     curr_bytes = base64.b64decode(raw_b64)
-                    frames_since_nudge += 1
 
-                    if prev_frame_bytes and frames_since_nudge >= DIFF_COOLDOWN_FRAMES and not ai_speaking:
+                    if prev_frame_bytes and not ai_speaking and nudge.should_nudge("vision_check", ""):
                         diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
                         if diff >= DIFF_THRESHOLD:
-                            frames_since_nudge = 0
+                            # Load step context if a manual is active
+                            step_context = ""
+                            async with AsyncSessionLocal() as db:
+                                sess = await SessionStore.get_session(db, session_id)
+                                if sess and sess.active_manual_id:
+                                    manual = await get_manual_by_id(db, sess.active_manual_id)
+                                    if manual:
+                                        step_num = sess.current_step or 0
+                                        teardown = manual.get("teardown", {})
+                                        steps_list = teardown.get("steps", []) if isinstance(teardown, dict) else []
+                                        if steps_list and step_num < len(steps_list):
+                                            current = steps_list[step_num]
+                                            step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
+
+                            nudge_text = f"[SCENE_CHANGED] Glance at the latest frame.{step_context} Describe ONLY objects clearly visible in this exact frame right now. Do NOT say 'removed' or 'confirmed' unless you can name a specific visual feature of the current frame that proves it (e.g., 'empty battery compartment with contacts exposed'). If you cannot clearly see what changed, stay silent."
+
                             await gemini_ws.send(json.dumps({
                                 "clientContent": {
-                                    "turns": [{"role": "user", "parts": [{"text": "[SCENE_CHANGED] Glance at the latest frame. Comment ONLY if something is actually, clearly different — not if the user's hand is just moving or the frame is blurry. If you cannot CLEARLY see what changed, stay silent."}]}],
+                                    "turns": [{"role": "user", "parts": [{"text": nudge_text}]}],
                                     "turnComplete": True
                                 }
                             }))
