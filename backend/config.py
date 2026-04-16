@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     # Google/Gemini
     google_api_key: str = Field(default="")
     
+    # OpenAI (for plugins)
+    openai_api_key: str = Field(default="")
+    
+    # Deepgram
+    deepgram_api_key: str = Field(default="")
+    
     # Application
     agent_name: str = Field(default="repair-assistant")
     log_level: str = Field(default="INFO")
@@ -29,6 +35,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields
 
 settings = Settings(
     mongo_url=os.getenv('MONGO_URL', 'mongodb://localhost:27017'),
@@ -38,6 +45,8 @@ settings = Settings(
     livekit_api_key=os.getenv('LIVEKIT_API_KEY', 'devkey'),
     livekit_api_secret=os.getenv('LIVEKIT_API_SECRET', 'secret'),
     google_api_key=os.getenv('GOOGLE_API_KEY', ''),
+    openai_api_key=os.getenv('OPENAI_API_KEY', ''),
+    deepgram_api_key=os.getenv('DEEPGRAM_API_KEY', ''),
     agent_name=os.getenv('AGENT_NAME', 'repair-assistant'),
     log_level=os.getenv('LOG_LEVEL', 'INFO'),
     max_session_duration=int(os.getenv('MAX_SESSION_DURATION', '3600'))
