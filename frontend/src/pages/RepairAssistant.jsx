@@ -128,8 +128,20 @@ export default function RepairAssistant() {
         setStatus('Speaking...');
         playAudioChunk(msg.data);
       } else if (msg.type === 'transcription') {
-        if (msg.role === 'user') log('SPEECH', `User: "${msg.text}"`);
-        else log('SPEECH', `Assistant: "${msg.text}"`);
+        let text = msg.text;
+        // Fix: Gemini sometimes transcribes English speech in non-Latin script
+        // Detect and mark it so user knows
+        if (msg.role === 'user') {
+          const hasNonLatin = /[^\u0000-\u024F\u1E00-\u1EFF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF\u2100-\u214F.,!?;:'"()\-\s\d]/.test(text);
+          if (hasNonLatin) {
+            log('SPEECH', `User (non-English transcription detected): "${text}"`);
+            // Don't show non-English transcription to user — it's garbled
+            return;
+          }
+          log('SPEECH', `User: "${text}"`);
+        } else {
+          log('SPEECH', `Assistant: "${text}"`);
+        }
         setTranscript(prev => {
           const last = prev[prev.length - 1];
           if (last && last.role === msg.role && !last.final) {
