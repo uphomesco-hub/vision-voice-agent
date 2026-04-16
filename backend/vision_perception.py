@@ -22,7 +22,8 @@ Output STRICT JSON, no prose, no markdown fences:
   "device_state": string,             // one short sentence describing the CURRENT visible state of the main device — e.g. "battery cover open, one AA battery still seated"
   "visible_features": [string, ...],  // specific features you can point to — e.g. "two metal contacts exposed in empty slot", "red LED off", "one screw hole empty"
   "changed_vs_prior": [string, ...],  // ONLY facts that changed vs the prior observation — empty list if identical. Each entry must cite a visible feature, not infer an action.
-  "confidence": float,                // 0.0 to 1.0 — how confidently you can see the main subject. Low if blurry / hand blocking / dark.
+  "focus_area": string,               // one short phrase (≤8 words) naming the most important area to look at now — e.g. "battery compartment", "back panel seam". Empty if nothing stands out.
+  "confidence": float,                // 0.0 to 1.0
   "safety_concern": string            // empty string unless you see bare wires, sparks, liquid, blade near fingers, etc.
 }
 
