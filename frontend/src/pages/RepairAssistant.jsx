@@ -64,8 +64,11 @@ export default function RepairAssistant() {
       await navigator.mediaDevices.getUserMedia({ audio: true });
       
       // Connect to LiveKit
-      setStatus('Connecting...');
-      const room = new Room();
+      setStatus('Connecting to voice server...');
+      const room = new Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
       roomRef.current = room;
       
       // Setup event handlers
@@ -84,13 +87,34 @@ export default function RepairAssistant() {
         setStatus('Listening...');
       });
       
-      room.on('disconnected', () => {
+      room.on('disconnected', (reason) => {
+        console.log('Room disconnected, reason:', reason);
         setIsConnected(false);
         setStatus('Disconnected');
+        setVoiceState('idle');
+      });
+
+      room.on('reconnecting', () => {
+        setStatus('Reconnecting...');
+      });
+
+      room.on('reconnected', () => {
+        setStatus('Listening...');
+        setVoiceState('listening');
+      });
+
+      room.on('signalConnected', () => {
+        console.log('Signal connected to LiveKit');
+        setStatus('Signal connected, establishing media...');
       });
       
-      // Connect
-      await room.connect(livekit_url, token);
+      // Connect with timeout
+      const connectPromise = room.connect(livekit_url, token);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Connection timeout - media channel could not be established. The voice server may not be directly reachable from your network.')), 20000)
+      );
+      
+      await Promise.race([connectPromise, timeoutPromise]);
       await room.localParticipant.setMicrophoneEnabled(true);
       
       setIsConnected(true);
@@ -105,7 +129,22 @@ export default function RepairAssistant() {
       
     } catch (error) {
       console.error('Error starting session:', error);
-      setStatus('Error: ' + error.message);
+      
+      // Clean up room on failure
+      if (roomRef.current) {
+        try { await roomRef.current.disconnect(); } catch (e) {}
+        roomRef.current = null;
+      }
+      
+      let errorMsg = error.message;
+      if (errorMsg.includes('pc connection') || errorMsg.includes('Connection timeout') || errorMsg.includes('TRANSPORT_FAILURE')) {
+        errorMsg = 'Could not establish voice connection. WebRTC media requires direct network access to the server.';
+      } else if (errorMsg.includes('Permission denied') || errorMsg.includes('NotAllowedError')) {
+        errorMsg = 'Microphone access denied. Please allow microphone permissions.';
+      }
+      
+      setStatus('Error: ' + errorMsg);
+      setVoiceState('idle');
     }
   };
 
