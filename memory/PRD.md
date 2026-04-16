@@ -1,73 +1,95 @@
 # Voice-First Realtime Repair Assistant - PRD
 
 ## Original Problem Statement
-Build a web-based, voice-first realtime repair assistant with voice and vision capabilities, powered by Gemini Live API.
+Build a web-based, voice-first realtime repair assistant with voice and vision capabilities, powered by Gemini Live API. Step 2 adds camera vision, manual lookup tool, session persistence, and side panels.
 
-## Architecture (v2 - Direct Gemini Live)
+## Architecture (v2.0 - Direct Gemini Live + Vision)
 ```
 Browser (mic + camera)
-    ↕ WebSocket (JSON + base64 audio)
+    ↕ WebSocket (JSON: audio chunks + JPEG frames + events)
 FastAPI Backend (/api/ws/session)
-    ↕ WebSocket (google-genai SDK)
-Gemini Live API (gemini-2.5-flash-preview-native-audio-dialog)
+    ↕ Raw WebSocket (google BidiGenerateContent)
+Gemini Live API (gemini-2.5-flash-native-audio-latest)
+    → Tool calling: lookup_manual → SQLite manuals DB
 ```
 
-**No LiveKit, no WebRTC** — pure WebSocket streaming. Works through any HTTP proxy/ingress.
-
 ## Tech Stack
-- **Frontend**: React 19, CSS (dark theme), browser AudioContext + getUserMedia
-- **Backend**: FastAPI, google-genai SDK (v1.71.0)
-- **Voice**: Gemini Live API (native audio dialog model)
-- **API Key**: Google API Key (direct, not Emergent proxy — Live API requires WebSocket which Emergent proxy doesn't support)
+- **Frontend**: React 19, CSS (dark theme), browser AudioContext + getUserMedia + camera
+- **Backend**: FastAPI, SQLAlchemy (SQLite), raw WebSocket to Gemini
+- **Voice**: Gemini Live API (native audio model)
+- **Vision**: Camera frames (JPEG 640x480 every 2s) sent via Gemini realtimeInput
+- **Tools**: lookup_manual (function calling via Gemini)
+- **API Key**: Google API Key (direct)
+
+## DB Schema
+- `sessions`: id, persona_id, voice_id, status, active_device_type, active_device_model, active_manual_id, current_step, pending_goal, warnings_given, timestamps
+- `session_turns`: id, session_id, role, content, source_type, created_at
+- `session_observations`: id, session_id, obs_type, summary, structured_data, confidence, created_at
+- `session_tool_runs`: id, session_id, tool_name, input_data, output_data, status, error, timestamps
+- `manuals`: id, brand, model, device_type, title, json_data, timestamps
+- `session_snapshots`: id, session_id, state_data, created_at
 
 ## Key API Endpoints
-- `GET /api/health` - Health check (returns model name + mode)
-- `GET /api/personas` - List assistant personas (4)
-- `GET /api/voices` - List voices (Puck, Charon, Kore, Aoede, Fenrir)
-- `WS /api/ws/session` - Main voice session WebSocket
+- `GET /api/health` - Health check (v2.0-step2)
+- `GET /api/personas` - List personas (4)
+- `GET /api/voices` - List voices (5)
+- `POST /api/sessions` - Create session
+- `GET /api/sessions/{id}/state` - Full session state (turns, observations, tool_runs)
+- `GET /api/sessions/{id}/logs` - Session logs
+- `POST /api/sessions/{id}/end` - End session
+- `WS /api/ws/session` - Realtime voice + vision session
 
-## WebSocket Protocol (/api/ws/session)
-**Client → Server:**
-- `{ "type": "config", "persona_id": "...", "voice_id": "..." }` (first message)
-- `{ "type": "audio", "data": "<base64 PCM16 16kHz>" }`
-- `{ "type": "video", "data": "<base64 JPEG>" }`
-- `{ "type": "text", "content": "..." }`
-- `{ "type": "end" }`
+## WebSocket Protocol
+**Client → Server:** config, audio, video, text, heartbeat, end
+**Server → Client:** session.ready, status, assistant.state, audio, transcription, turn_complete, interrupted, tool.status, error, heartbeat
 
-**Server → Client:**
-- `{ "type": "status", "message": "..." }`
-- `{ "type": "audio", "data": "<base64 PCM16 24kHz>" }`
-- `{ "type": "transcription", "role": "user|assistant", "text": "..." }`
-- `{ "type": "turn_complete" }`
-- `{ "type": "interrupted" }`
-- `{ "type": "error", "message": "..." }`
+## Seed Manuals
+1. Stihl FS 56 RC String Trimmer (stihl-fs56rc)
+2. Dyson V15 Detect Cordless Vacuum (dyson-v15)
 
-## What's Implemented - April 16, 2026
+## What's Implemented
 
-### v2 Rebuild (Direct Gemini Live)
-- [x] FastAPI backend with Gemini Live API WebSocket proxy
-- [x] Browser mic capture (PCM16 16kHz) via ScriptProcessor
-- [x] Audio playback (PCM16 24kHz) via AudioContext
-- [x] Real-time transcriptions (input + output)
-- [x] Turn detection + interruption handling
-- [x] Dark theme UI (cinematic sentinel design)
-- [x] Persona and voice selection
-- [x] Session lifecycle management
+### Step 1 (April 16, 2026)
+- [x] Voice conversation with Gemini Live API
+- [x] Auto-reconnect for K8s 60s limit
+- [x] Dark theme UI
+- [x] Persona/voice selection
 
-### v1 (Removed)
-- ~~LiveKit server~~ (removed - WebRTC not needed)
-- ~~Agent worker~~ (removed - Gemini called directly)
-- ~~WebSocket/HTTP proxy for LiveKit~~ (removed)
+### Step 2 Phase A+B (April 16, 2026)
+- [x] Camera feed in UI (live video element, JPEG frames every 2s)
+- [x] Video frames sent to Gemini alongside audio
+- [x] Expanded DB schema (observations, tool_runs, manuals, snapshots)
+- [x] Manual repository with search + ranking
+- [x] 2 seed manuals (Stihl trimmer, Dyson vacuum)
+- [x] lookup_manual tool via Gemini function calling
+- [x] Tool activity shown in UI panel
+- [x] Active manual panel
+- [x] Warnings panel
+- [x] Troubleshooting steps panel
+- [x] Voice state aura animations (listening/speaking/thinking)
+- [x] Session CRUD API (create, state, logs, end)
+- [x] Transcript persistence to DB
+- [x] Updated prompt for vision + tools + repair behavior
 
 ## Backlog
 
-### P1 - UI Enhancements
-- Visual state indicators (Listening/Thinking/Speaking animations)
-- Camera/Vision toggle for repair inspection
+### P1 - Phase C: Nudge Engine + Smart Behavior
+- Semantic vision layer with scene schema + state diffing
+- Nudge engine with per-type cooldowns
+- Step-by-step tracking from manual
+- Proactive but restrained visual observations
 
-### P2 - Step 2 Features
-- Camera frame streaming for visual diagnosis
-- Manual lookup tool integration
-- Warnings/repair observations panel
-- Repair-step panel
-- Session history/persistence
+### P1 - Phase D: UI Polish
+- Transcript drawer toggle
+- Vision activity status indicator
+- Calm state transitions (damped rapid changes)
+- Mobile responsive layout
+
+### P2 - Phase E: Session Persistence + Reconnect
+- Full DB-backed session state for reconnect
+- Session snapshots for restart recovery
+- Structured logging by session_id
+
+### P3 - Future
+- Camera/Vision capabilities refinement
+- Context window compression for long sessions
