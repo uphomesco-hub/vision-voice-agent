@@ -107,6 +107,8 @@ async def ws_session(websocket: WebSocket):
     session_id = None
     nudge = NudgeEngine()
     frame_count = 0
+    last_nudge_frame = 0
+    is_speaking = False  # Track if Gemini is currently speaking
 
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -233,6 +235,7 @@ async def ws_session(websocket: WebSocket):
                         # Audio
                         mt = sc.get("modelTurn")
                         if mt and mt.get("parts"):
+                            is_speaking = True
                             await websocket.send_json({"type": "assistant.state", "state": "speaking"})
                             for p in mt["parts"]:
                                 idata = p.get("inlineData")
@@ -265,15 +268,26 @@ async def ws_session(websocket: WebSocket):
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
 
                         if sc.get("turnComplete"):
+                            is_speaking = False
                             logger.info(f"[{session_id}] Turn complete")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
-                            # Persist
+                            # Persist turns
                             async with AsyncSessionLocal() as db:
                                 if user_buf.strip():
                                     await SessionStore.add_turn(db, session_id, "user", user_buf.strip())
                                 if asst_buf.strip():
                                     await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
+                                    # Check if assistant mentioned completing a step — advance step counter
+                                    step_keywords = ["next step", "step done", "move on to", "that's done", "let's proceed", "now we need to", "good, now"]
+                                    lower_asst = asst_buf.lower()
+                                    if any(kw in lower_asst for kw in step_keywords):
+                                        sess = await SessionStore.get_session(db, session_id)
+                                        if sess:
+                                            new_step = (sess.current_step or 0) + 1
+                                            await SessionStore.update_session(db, session_id, current_step=new_step)
+                                            await websocket.send_json({"type": "step.update", "step": new_step})
+                                            logger.info(f"[{session_id}] Step advanced to {new_step}")
                             user_buf = ""
                             asst_buf = ""
 
@@ -316,10 +330,48 @@ async def ws_session(websocket: WebSocket):
 
                 elif t == "video":
                     frame_count += 1
+                    # Always send frame to Gemini for context
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": msg["data"]}]}
                     }))
-                    if frame_count % 5 == 0:
+
+                    # ─── NUDGE SYSTEM: Periodically prompt Gemini to analyze what it sees ───
+                    # Trigger every 10 frames (~20s), but NOT while Gemini is speaking or user just spoke
+                    frames_since_nudge = frame_count - last_nudge_frame
+                    should_nudge = (
+                        frames_since_nudge >= 10
+                        and not is_speaking
+                        and nudge.should_nudge("vision_check", "")
+                    )
+
+                    if should_nudge:
+                        last_nudge_frame = frame_count
+                        # Load current session state for context
+                        step_context = ""
+                        async with AsyncSessionLocal() as db:
+                            sess = await SessionStore.get_session(db, session_id)
+                            if sess and sess.active_manual_id:
+                                manual = await get_manual_by_id(db, sess.active_manual_id)
+                                if manual:
+                                    step_num = sess.current_step or 0
+                                    teardown = manual.get("teardown", {})
+                                    steps_list = teardown.get("steps", []) if isinstance(teardown, dict) else []
+                                    if steps_list and step_num < len(steps_list):
+                                        current = steps_list[step_num]
+                                        step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
+
+                        nudge_prompt = f"[VISION CHECK] Look at the current camera frame carefully. What do you see RIGHT NOW? Has anything changed since last time?{step_context} If the current step looks completed based on what you see, confirm it and tell the user the next step. If nothing meaningful changed, stay silent — do NOT repeat old observations. Only speak if you see something new or important."
+
+                        await gemini_ws.send(json.dumps({
+                            "clientContent": {
+                                "turns": [{"role": "user", "parts": [{"text": nudge_prompt}]}],
+                                "turnComplete": True
+                            }
+                        }))
+                        logger.info(f"[{session_id}] Vision nudge sent (frame #{frame_count})")
+                        await websocket.send_json({"type": "vision.status", "status": "analyzing"})
+
+                    if frame_count % 10 == 0:
                         logger.info(f"[{session_id}] Frames sent: {frame_count}")
 
                 elif t == "text":

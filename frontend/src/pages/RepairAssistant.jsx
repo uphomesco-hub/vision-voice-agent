@@ -176,6 +176,12 @@ export default function RepairAssistant() {
         } else {
           setStatus('Error: ' + msg.message);
         }
+      } else if (msg.type === 'vision.status') {
+        log('VISION', `Vision check: ${msg.status}`);
+        setVisionStatus(msg.status === 'analyzing' ? 'Analyzing frame...' : null);
+        if (msg.status === 'analyzing') setTimeout(() => setVisionStatus(null), 3000);
+      } else if (msg.type === 'step.update') {
+        log('STEP', `Advanced to step ${msg.step}`);
       }
     } catch (e) { log('ERROR', 'WS parse error:', e); }
   }, [playAudioChunk]);
