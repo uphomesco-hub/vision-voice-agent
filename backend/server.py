@@ -396,31 +396,42 @@ async def ws_session(websocket: WebSocket):
                     if prev_frame_bytes and not ai_speaking:
                         diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
                         if diff >= DIFF_THRESHOLD and nudge.should_nudge("vision_check", ""):
-                            # ─── STAGE 1: cold perception via Flash ───
-                            obs = await perceive_scene(raw_b64, prior_obs=last_perception)
-                            if obs is None:
-                                logger.info(f"[{session_id}] perception failed, skipping nudge")
-                            else:
-                                sig = observation_signature(obs)
-                                confidence = float(obs.get("confidence", 0) or 0)
-                                changes = obs.get("changed_vs_prior", []) or []
-                                safety = (obs.get("safety_concern") or "").strip()
+                            # Fire perception off the main loop to avoid blocking frame intake
+                            _snap_b64 = raw_b64
+                            _snap_sid = session_id
+                            async def _run_perception():
+                                nonlocal last_perception, last_perception_sig
+                                try:
+                                    obs = await perceive_scene(_snap_b64, prior_obs=last_perception)
+                                    if obs is None:
+                                        logger.info(f"[{_snap_sid}] perception failed, skipping nudge")
+                                        return
+                                    sig = observation_signature(obs)
+                                    confidence = float(obs.get("confidence", 0) or 0)
+                                    changes = obs.get("changed_vs_prior", []) or []
+                                    safety = (obs.get("safety_concern") or "").strip()
 
-                                # Skip if low confidence or nothing new (safety always passes)
-                                if not safety and (confidence < 0.5 or not changes) and sig == last_perception_sig:
-                                    logger.info(f"[{session_id}] perception stable (conf={confidence:.2f}), no narration")
-                                elif not safety and (confidence < 0.5 or not changes):
-                                    last_perception = obs
-                                    last_perception_sig = sig
-                                    logger.info(f"[{session_id}] perception: no new changes")
-                                else:
-                                    last_perception = obs
-                                    last_perception_sig = sig
+                                    # Skip if low confidence or nothing new (safety always passes)
+                                    if not safety and (confidence < 0.5 or not changes) and sig == last_perception_sig:
+                                        logger.info(f"[{_snap_sid}] perception stable (conf={confidence:.2f}), no narration")
+                                        return
+                                    if not safety and (confidence < 0.5 or not changes):
+                                        # Only update prior if confidence is good enough
+                                        if confidence >= 0.5:
+                                            last_perception = obs
+                                            last_perception_sig = sig
+                                        logger.info(f"[{_snap_sid}] perception: no new changes (conf={confidence:.2f})")
+                                        return
+
+                                    # Good observation with changes — update prior
+                                    if confidence >= 0.5:
+                                        last_perception = obs
+                                        last_perception_sig = sig
 
                                     # Build step context if a manual is active
                                     step_context = ""
                                     async with AsyncSessionLocal() as db:
-                                        sess = await SessionStore.get_session(db, session_id)
+                                        sess = await SessionStore.get_session(db, _snap_sid)
                                         if sess and sess.active_manual_id:
                                             manual = await get_manual_by_id(db, sess.active_manual_id)
                                             if manual:
@@ -431,7 +442,6 @@ async def ws_session(websocket: WebSocket):
                                                     current = steps_list[step_num]
                                                     step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
 
-                                    # ─── STAGE 2: inject verified facts into Live model ───
                                     obs_summary = json.dumps({
                                         "device_state": obs.get("device_state", ""),
                                         "visible_features": obs.get("visible_features", []),
@@ -454,7 +464,11 @@ async def ws_session(websocket: WebSocket):
                                             "turnComplete": True
                                         }
                                     }))
-                                    logger.info(f"[{session_id}] VISION_UPDATE sent (conf={confidence:.2f}, changes={len(changes)})")
+                                    logger.info(f"[{_snap_sid}] VISION_UPDATE sent (conf={confidence:.2f}, changes={len(changes)})")
+                                except Exception as e:
+                                    logger.error(f"[{_snap_sid}] perception task error: {e}")
+
+                            asyncio.create_task(_run_perception())
 
                     prev_frame_bytes = curr_bytes
                     if frame_count % 10 == 0:
