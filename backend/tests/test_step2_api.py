@@ -47,12 +47,12 @@ class TestPersonasEndpoint:
         assert response.status_code == 200
         print("✓ Personas endpoint returns 200")
     
-    def test_personas_returns_4_personas(self):
-        """GET /api/personas returns exactly 4 personas"""
+    def test_personas_returns_5_personas(self):
+        """GET /api/personas returns exactly 5 personas (including Ziggy)"""
         response = requests.get(f"{BASE_URL}/api/personas")
         data = response.json()
         assert isinstance(data, list)
-        assert len(data) == 4
+        assert len(data) == 5
         print(f"✓ Returned {len(data)} personas")
     
     def test_personas_have_required_fields(self):

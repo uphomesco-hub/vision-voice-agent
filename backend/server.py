@@ -497,8 +497,8 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
                 if result.get("selected_manual_id"):
                     await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
                 else:
-                    # No manual found — add clear instruction for Gemini
-                    result["no_manual_instruction"] = "IMPORTANT: No manual was found in our internal database for this device. You MUST tell the user: 'I don't have an internal repair manual for this device in my database. Let me use my general knowledge and search the web to help you.' Then proceed using your own knowledge and Google Search. Do NOT pretend you have a manual."
+                    # No manual found — short instruction for Gemini
+                    result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training and Google Search."
         else:
             result = {"error": f"Unknown tool: {fn}"}
 
