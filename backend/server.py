@@ -178,16 +178,40 @@ async def end_session(
 # Include API router
 app.include_router(api_router)
 
-# Serve static frontend files
-FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "public"
+# Serve React build (production) or public folder (development)
+FRONTEND_BUILD = Path(__file__).parent.parent / "frontend" / "build"
+FRONTEND_PUBLIC = Path(__file__).parent.parent / "frontend" / "public"
 
-@app.get("/")
-async def serve_index():
-    """Serve the main HTML page"""
-    return FileResponse(FRONTEND_DIR / "index.html")
-
-# Mount static files
-app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+if FRONTEND_BUILD.exists():
+    # Production: serve React build
+    logger.info(f"Serving React build from {FRONTEND_BUILD}")
+    
+    @app.get("/repair")
+    async def serve_repair_app():
+        """Serve the React app for /repair route"""
+        return FileResponse(FRONTEND_BUILD / "index.html")
+    
+    @app.get("/")
+    async def serve_root():
+        """Serve the React app root"""
+        return FileResponse(FRONTEND_BUILD / "index.html")
+    
+    # Mount static files from build
+    app.mount("/static", StaticFiles(directory=FRONTEND_BUILD / "static"), name="static")
+    app.mount("/", StaticFiles(directory=FRONTEND_BUILD, html=True), name="frontend")
+    
+else:
+    # Development: serve from public folder
+    logger.info(f"Serving from public folder: {FRONTEND_PUBLIC}")
+    
+    @app.get("/")
+    async def serve_index():
+        """Serve the main HTML page"""
+        return FileResponse(FRONTEND_PUBLIC / "index.html")
+    
+    # Mount static files
+    if FRONTEND_PUBLIC.exists():
+        app.mount("/static", StaticFiles(directory=FRONTEND_PUBLIC), name="static")
 
 if __name__ == "__main__":
     import uvicorn
