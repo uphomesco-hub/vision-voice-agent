@@ -310,5 +310,164 @@ class TestManualSeeding:
         print("✓ Session state includes manual-related fields")
 
 
+class TestWebSocketReconnect:
+    """WebSocket reconnect with resume_session_id tests"""
+    
+    @pytest.mark.asyncio
+    async def test_websocket_reconnect_reuses_same_session(self):
+        """WebSocket reconnect with resume_session_id reuses the same session"""
+        ws_url = f"{WS_BASE}/api/ws/session"
+        
+        # First connection - create new session
+        try:
+            async with websockets.connect(ws_url, close_timeout=15) as ws1:
+                config1 = {
+                    "type": "config",
+                    "persona_id": "calm-expert",
+                    "voice_id": "Puck"
+                }
+                await ws1.send(json.dumps(config1))
+                
+                # Get session.ready with session_id
+                response1 = await asyncio.wait_for(ws1.recv(), timeout=10)
+                data1 = json.loads(response1)
+                assert data1.get("type") == "session.ready"
+                original_session_id = data1.get("session_id")
+                assert original_session_id is not None
+                print(f"✓ First connection created session: {original_session_id}")
+        except Exception as e:
+            pytest.fail(f"First WebSocket connection failed: {e}")
+        
+        # Second connection - reconnect with resume_session_id
+        try:
+            async with websockets.connect(ws_url, close_timeout=15) as ws2:
+                config2 = {
+                    "type": "config",
+                    "persona_id": "calm-expert",
+                    "voice_id": "Puck",
+                    "resume_session_id": original_session_id
+                }
+                await ws2.send(json.dumps(config2))
+                
+                # Get session.ready - should have same session_id
+                response2 = await asyncio.wait_for(ws2.recv(), timeout=10)
+                data2 = json.loads(response2)
+                assert data2.get("type") == "session.ready"
+                resumed_session_id = data2.get("session_id")
+                
+                assert resumed_session_id == original_session_id
+                print(f"✓ Reconnect reused same session: {resumed_session_id}")
+        except Exception as e:
+            pytest.fail(f"Reconnect WebSocket failed: {e}")
+    
+    @pytest.mark.asyncio
+    async def test_websocket_reconnect_with_invalid_session_creates_new(self):
+        """WebSocket reconnect with invalid resume_session_id creates new session"""
+        ws_url = f"{WS_BASE}/api/ws/session"
+        
+        try:
+            async with websockets.connect(ws_url, close_timeout=15) as ws:
+                config = {
+                    "type": "config",
+                    "persona_id": "calm-expert",
+                    "voice_id": "Puck",
+                    "resume_session_id": "non-existent-session-id"
+                }
+                await ws.send(json.dumps(config))
+                
+                # Should still get session.ready with a new session_id
+                response = await asyncio.wait_for(ws.recv(), timeout=10)
+                data = json.loads(response)
+                assert data.get("type") == "session.ready"
+                assert "session_id" in data
+                assert data["session_id"] != "non-existent-session-id"
+                print(f"✓ Invalid resume_session_id created new session: {data['session_id']}")
+        except Exception as e:
+            pytest.fail(f"WebSocket with invalid resume_session_id failed: {e}")
+    
+    @pytest.mark.asyncio
+    async def test_websocket_reconnect_with_ended_session_creates_new(self):
+        """WebSocket reconnect with ended session creates new session"""
+        ws_url = f"{WS_BASE}/api/ws/session"
+        
+        # First create and end a session via REST API
+        create_resp = requests.post(f"{BASE_URL}/api/sessions", json={
+            "persona_id": "calm-expert",
+            "voice_id": "Puck"
+        })
+        ended_session_id = create_resp.json()["id"]
+        
+        # End the session
+        requests.post(f"{BASE_URL}/api/sessions/{ended_session_id}/end")
+        
+        # Try to reconnect to ended session
+        try:
+            async with websockets.connect(ws_url, close_timeout=15) as ws:
+                config = {
+                    "type": "config",
+                    "persona_id": "calm-expert",
+                    "voice_id": "Puck",
+                    "resume_session_id": ended_session_id
+                }
+                await ws.send(json.dumps(config))
+                
+                # Should get session.ready with a NEW session_id (not the ended one)
+                response = await asyncio.wait_for(ws.recv(), timeout=10)
+                data = json.loads(response)
+                assert data.get("type") == "session.ready"
+                new_session_id = data.get("session_id")
+                assert new_session_id != ended_session_id
+                print(f"✓ Ended session {ended_session_id} → new session {new_session_id}")
+        except Exception as e:
+            pytest.fail(f"WebSocket reconnect to ended session failed: {e}")
+
+
+class TestSessionStateFields:
+    """Tests for session state field completeness"""
+    
+    def test_session_state_has_current_step(self):
+        """GET /api/sessions/{id}/state returns current_step field"""
+        create_resp = requests.post(f"{BASE_URL}/api/sessions", json={
+            "persona_id": "calm-expert",
+            "voice_id": "Puck"
+        })
+        session_id = create_resp.json()["id"]
+        
+        response = requests.get(f"{BASE_URL}/api/sessions/{session_id}/state")
+        data = response.json()
+        
+        assert "current_step" in data
+        assert isinstance(data["current_step"], int)
+        print(f"✓ Session state has current_step: {data['current_step']}")
+    
+    def test_session_state_has_all_required_fields(self):
+        """GET /api/sessions/{id}/state returns all required fields"""
+        create_resp = requests.post(f"{BASE_URL}/api/sessions", json={
+            "persona_id": "precise-technician",
+            "voice_id": "Kore"
+        })
+        session_id = create_resp.json()["id"]
+        
+        response = requests.get(f"{BASE_URL}/api/sessions/{session_id}/state")
+        data = response.json()
+        
+        required_fields = [
+            "session_id", "status", "persona_id", "voice_id",
+            "active_device_type", "active_device_model", "active_manual_id",
+            "current_step", "pending_goal", "warnings_given",
+            "turns", "observations", "tool_runs"
+        ]
+        
+        for field in required_fields:
+            assert field in data, f"Missing field: {field}"
+        
+        # Verify arrays
+        assert isinstance(data["turns"], list)
+        assert isinstance(data["observations"], list)
+        assert isinstance(data["tool_runs"], list)
+        
+        print(f"✓ Session state has all {len(required_fields)} required fields")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])

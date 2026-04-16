@@ -4,15 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 import logging
 import asyncio
-import base64
 import json
 import os
 import websockets
+from datetime import datetime, timezone
 
-from db import init_db, get_db, AsyncSessionLocal
+from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
 from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
+from nudge_engine import NudgeEngine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -43,18 +44,18 @@ LOOKUP_MANUAL_DECL = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Server starting — initializing DB...")
+    logger.info("Server starting — init DB...")
     await init_db()
     async with AsyncSessionLocal() as db:
         await seed_manuals(db)
-    logger.info("DB initialized, manuals seeded")
+    logger.info("DB ready, manuals seeded")
     yield
-    logger.info("Server shutting down...")
+    logger.info("Server shutting down")
 
 app = FastAPI(title="Repair Assistant", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
-# ─── REST API ───────────────────────────────────────────────
+# ─── REST API ───────────────────────────
 api = APIRouter(prefix="/api")
 
 @api.get("/health")
@@ -71,109 +72,144 @@ async def list_voices():
 
 @api.post("/sessions")
 async def create_session(payload: dict, db: AsyncSession = Depends(get_db)):
-    session = await SessionStore.create_session(db, payload.get("persona_id", "calm-expert"), payload.get("voice_id", "Puck"))
-    return {"id": session.id, "status": session.status}
+    s = await SessionStore.create_session(db, payload.get("persona_id", "calm-expert"), payload.get("voice_id", "Puck"))
+    return {"id": s.id, "status": s.status}
 
-@api.get("/sessions/{session_id}/state")
-async def get_session_state(session_id: str, db: AsyncSession = Depends(get_db)):
-    state = await SessionStore.get_session_state(db, session_id)
-    if not state:
-        return {"error": "Session not found"}
-    return state
+@api.get("/sessions/{sid}/state")
+async def get_state(sid: str, db: AsyncSession = Depends(get_db)):
+    st = await SessionStore.get_session_state(db, sid)
+    return st or {"error": "Session not found"}
 
-@api.get("/sessions/{session_id}/logs")
-async def get_session_logs(session_id: str, db: AsyncSession = Depends(get_db)):
-    turns = await SessionStore.get_turns(db, session_id, limit=100)
-    tool_runs = await SessionStore.get_tool_runs(db, session_id, limit=50)
+@api.get("/sessions/{sid}/logs")
+async def get_logs(sid: str, db: AsyncSession = Depends(get_db)):
+    turns = await SessionStore.get_turns(db, sid, limit=100)
+    tool_runs = await SessionStore.get_tool_runs(db, sid, limit=50)
     return {
         "turns": [{"role": t.role, "content": t.content, "source_type": t.source_type, "created_at": t.created_at.isoformat()} for t in turns],
         "tool_runs": [{"tool": tr.tool_name, "status": tr.status, "input": tr.input_data, "output": tr.output_data, "created_at": tr.created_at.isoformat()} for tr in tool_runs],
     }
 
-@api.post("/sessions/{session_id}/end")
-async def end_session_api(session_id: str, db: AsyncSession = Depends(get_db)):
-    ok = await SessionStore.end_session(db, session_id)
-    return {"status": "ended" if ok else "not_found"}
+@api.post("/sessions/{sid}/end")
+async def end_session_api(sid: str, db: AsyncSession = Depends(get_db)):
+    return {"status": "ended" if await SessionStore.end_session(db, sid) else "not_found"}
 
 app.include_router(api)
 
-# ─── WEBSOCKET REALTIME SESSION ─────────────────────────────
+# ─── WEBSOCKET ───────────────────────────
 @app.websocket("/api/ws/session")
-async def voice_session(websocket: WebSocket):
+async def ws_session(websocket: WebSocket):
     await websocket.accept()
-    logger.info("Client WS connected")
+    logger.info("WS connected")
 
     gemini_ws = None
-    receive_task = None
-    session_alive = True
+    recv_task = None
+    alive = True
     session_id = None
+    nudge = NudgeEngine()
+    frame_count = 0
 
     try:
-        # 1. Wait for config
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-        config_msg = json.loads(raw)
-        if config_msg.get("type") != "config":
+        cfg = json.loads(raw)
+        if cfg.get("type") != "config":
             await websocket.send_json({"type": "error", "message": "First message must be config"})
             return
 
-        persona_id = config_msg.get("persona_id", "calm-expert")
-        voice_id = config_msg.get("voice_id", "Puck")
+        persona_id = cfg.get("persona_id", "calm-expert")
+        voice_id = cfg.get("voice_id", "Puck")
+        resume_id = cfg.get("resume_session_id")  # For reconnect-with-history
 
-        # 2. Create session in DB
+        # Create or resume session
         async with AsyncSessionLocal() as db:
-            sess = await SessionStore.create_session(db, persona_id, voice_id)
-            session_id = sess.id
+            if resume_id:
+                existing = await SessionStore.get_session(db, resume_id)
+                if existing and existing.status == "active":
+                    session_id = resume_id
+                    logger.info(f"[{session_id}] Resuming session")
+                else:
+                    s = await SessionStore.create_session(db, persona_id, voice_id)
+                    session_id = s.id
+            else:
+                s = await SessionStore.create_session(db, persona_id, voice_id)
+                session_id = s.id
 
         await websocket.send_json({"type": "session.ready", "session_id": session_id})
         await websocket.send_json({"type": "assistant.state", "state": "connecting"})
 
-        # 3. Build prompt
+        # Build prompt + conversation history for context
         from prompts import build_agent_prompt
         system_prompt = build_agent_prompt(persona_id, voice_id)
 
-        # 4. Connect to Gemini raw WS
-        logger.info(f"[{session_id}] Connecting Gemini: {MODEL_ID}, voice={voice_id}")
+        # Load previous turns for reconnect context
+        history_context = ""
+        active_manual_context = ""
+        if resume_id:
+            async with AsyncSessionLocal() as db:
+                turns = await SessionStore.get_turns(db, session_id, limit=20)
+                if turns:
+                    history_context = "\n\nPREVIOUS CONVERSATION (for context — session was briefly interrupted):\n"
+                    for t in turns:
+                        role_label = "User" if t.role == "user" else "Assistant"
+                        history_context += f"{role_label}: {t.content}\n"
+                    history_context += "\nContinue the conversation naturally from where you left off. Do NOT repeat your last response."
+
+                # Load active manual context
+                sess = await SessionStore.get_session(db, session_id)
+                if sess and sess.active_manual_id:
+                    manual = await get_manual_by_id(db, sess.active_manual_id)
+                    if manual:
+                        active_manual_context = f"\n\nACTIVE MANUAL: {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
+
+        full_prompt = system_prompt + history_context + active_manual_context
+
+        # Connect to Gemini
+        logger.info(f"[{session_id}] Connecting Gemini (resume={bool(resume_id)})")
         gemini_ws = await websockets.connect(
             GEMINI_WS_URL,
             ping_interval=30, ping_timeout=60, close_timeout=5,
             max_size=16 * 1024 * 1024,
         )
 
-        setup_msg = {
+        setup = {
             "setup": {
                 "model": f"models/{MODEL_ID}",
                 "generation_config": {
                     "response_modalities": ["AUDIO"],
-                    "speech_config": {
-                        "voice_config": {"prebuilt_voice_config": {"voice_name": voice_id}}
-                    }
+                    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_id}}}
                 },
-                "system_instruction": {"parts": [{"text": system_prompt}]},
+                "system_instruction": {"parts": [{"text": full_prompt}]},
                 "tools": [{"function_declarations": [LOOKUP_MANUAL_DECL]}],
                 "input_audio_transcription": {},
                 "output_audio_transcription": {}
             }
         }
-        await gemini_ws.send(json.dumps(setup_msg))
-        setup_resp = json.loads(await asyncio.wait_for(gemini_ws.recv(), timeout=10))
-        logger.info(f"[{session_id}] Gemini setup OK")
+        await gemini_ws.send(json.dumps(setup))
+        json.loads(await asyncio.wait_for(gemini_ws.recv(), timeout=10))
+        logger.info(f"[{session_id}] Gemini ready")
 
         await websocket.send_json({"type": "assistant.state", "state": "listening"})
         await websocket.send_json({"type": "status", "message": "Connected! Start speaking..."})
 
-        # 5. Receive from Gemini → forward to client
-        async def receive_from_gemini():
-            nonlocal session_alive
-            user_transcript_buf = ""
-            assistant_transcript_buf = ""
+        # Send session state to client if resuming
+        if resume_id:
+            async with AsyncSessionLocal() as db:
+                state = await SessionStore.get_session_state(db, session_id)
+                if state:
+                    await websocket.send_json({"type": "session.state", "data": state})
+
+        # ─── Gemini → Client ───
+        async def recv_gemini():
+            nonlocal alive
+            user_buf = ""
+            asst_buf = ""
             try:
                 async for raw_msg in gemini_ws:
-                    if not session_alive:
+                    if not alive:
                         break
                     try:
                         data = json.loads(raw_msg)
 
-                        # ── Tool call from Gemini ──
+                        # Tool call
                         tc = data.get("toolCall")
                         if tc:
                             await handle_tool_call(tc, session_id, gemini_ws, websocket)
@@ -186,71 +222,76 @@ async def voice_session(websocket: WebSocket):
                         # Audio
                         mt = sc.get("modelTurn")
                         if mt and mt.get("parts"):
-                            for part in mt["parts"]:
-                                idata = part.get("inlineData")
+                            await websocket.send_json({"type": "assistant.state", "state": "speaking"})
+                            for p in mt["parts"]:
+                                idata = p.get("inlineData")
                                 if idata and idata.get("data"):
                                     await websocket.send_json({"type": "audio", "data": idata["data"]})
 
                         # Input transcription
                         itx = sc.get("inputTranscription")
                         if itx and itx.get("text"):
-                            user_transcript_buf += itx["text"]
+                            user_buf += itx["text"]
+                            nudge.user_spoke()
                             await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
 
                         # Output transcription
                         otx = sc.get("outputTranscription")
                         if otx and otx.get("text"):
-                            assistant_transcript_buf += otx["text"]
+                            asst_buf += otx["text"]
                             await websocket.send_json({"type": "transcription", "role": "assistant", "text": otx["text"]})
 
-                        # Interrupted
+                        # Grounding (Google Search)
+                        gm = sc.get("groundingMetadata")
+                        if gm:
+                            queries = gm.get("webSearchQueries", [])
+                            if queries:
+                                await websocket.send_json({"type": "tool.status", "tool": "google_search", "status": "done", "queries": queries})
+                                logger.info(f"[{session_id}] Google Search: {queries}")
+
                         if sc.get("interrupted"):
                             await websocket.send_json({"type": "interrupted"})
+                            await websocket.send_json({"type": "assistant.state", "state": "listening"})
 
-                        # Turn complete
                         if sc.get("turnComplete"):
                             logger.info(f"[{session_id}] Turn complete")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
-                            # Persist transcripts
-                            if user_transcript_buf.strip():
-                                async with AsyncSessionLocal() as db:
-                                    await SessionStore.add_turn(db, session_id, "user", user_transcript_buf.strip())
-                            if assistant_transcript_buf.strip():
-                                async with AsyncSessionLocal() as db:
-                                    await SessionStore.add_turn(db, session_id, "assistant", assistant_transcript_buf.strip())
-                            user_transcript_buf = ""
-                            assistant_transcript_buf = ""
+                            # Persist
+                            async with AsyncSessionLocal() as db:
+                                if user_buf.strip():
+                                    await SessionStore.add_turn(db, session_id, "user", user_buf.strip())
+                                if asst_buf.strip():
+                                    await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
+                            user_buf = ""
+                            asst_buf = ""
 
                     except Exception as e:
-                        logger.error(f"[{session_id}] Gemini msg error: {e}")
+                        logger.error(f"[{session_id}] Gemini msg err: {e}")
 
             except websockets.exceptions.ConnectionClosedOK:
-                logger.info(f"[{session_id}] Gemini closed normally")
+                logger.info(f"[{session_id}] Gemini closed OK")
             except websockets.exceptions.ConnectionClosedError as e:
                 logger.error(f"[{session_id}] Gemini closed: {e}")
-                session_alive = False
+                alive = False
                 try:
-                    await websocket.send_json({"type": "error", "message": "Voice session disconnected. Please start a new session."})
+                    await websocket.send_json({"type": "error", "message": "Voice session disconnected."})
                 except:
                     pass
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
-                logger.error(f"[{session_id}] Gemini receive error: {e}")
-                session_alive = False
 
-        receive_task = asyncio.create_task(receive_from_gemini())
+        recv_task = asyncio.create_task(recv_gemini())
 
-        # 6. Main loop: client → Gemini
-        while session_alive:
+        # ─── Client → Gemini ───
+        while alive:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=900)
             except asyncio.TimeoutError:
                 await websocket.send_json({"type": "error", "message": "Session timeout (15 min idle)"})
                 break
 
-            if not session_alive:
+            if not alive:
                 break
 
             try:
@@ -263,34 +304,35 @@ async def voice_session(websocket: WebSocket):
                     }))
 
                 elif t == "video":
+                    frame_count += 1
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": msg["data"]}]}
                     }))
-                    logger.debug(f"[{session_id}] Video frame forwarded")
+                    if frame_count % 5 == 0:
+                        logger.info(f"[{session_id}] Frames sent: {frame_count}")
 
                 elif t == "text":
-                    text = msg.get("content", "")
-                    if text:
+                    txt = msg.get("content", "")
+                    if txt:
                         await gemini_ws.send(json.dumps({
-                            "clientContent": {"turns": [{"role": "user", "parts": [{"text": text}]}], "turnComplete": True}
+                            "clientContent": {"turns": [{"role": "user", "parts": [{"text": txt}]}], "turnComplete": True}
                         }))
 
                 elif t == "heartbeat":
                     await websocket.send_json({"type": "heartbeat"})
 
                 elif t == "end":
-                    logger.info(f"[{session_id}] Client ended session")
+                    logger.info(f"[{session_id}] Client ended")
                     break
 
             except websockets.exceptions.ConnectionClosed:
-                logger.error(f"[{session_id}] Gemini closed while sending")
-                session_alive = False
+                alive = False
                 await websocket.send_json({"type": "error", "message": "Voice session disconnected."})
                 break
             except Exception as e:
-                logger.error(f"[{session_id}] Send error: {e}")
+                logger.error(f"[{session_id}] Fwd err: {e}")
                 if "closed" in str(e).lower():
-                    session_alive = False
+                    alive = False
                     break
 
     except WebSocketDisconnect:
@@ -298,17 +340,17 @@ async def voice_session(websocket: WebSocket):
     except asyncio.TimeoutError:
         logger.info("Config timeout")
     except Exception as e:
-        logger.error(f"[{session_id}] Session error: {e}")
+        logger.error(f"[{session_id}] Session err: {e}")
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except:
             pass
     finally:
-        session_alive = False
-        if receive_task:
-            receive_task.cancel()
+        alive = False
+        if recv_task:
+            recv_task.cancel()
             try:
-                await receive_task
+                await recv_task
             except asyncio.CancelledError:
                 pass
         if gemini_ws:
@@ -316,73 +358,58 @@ async def voice_session(websocket: WebSocket):
                 await gemini_ws.close()
             except:
                 pass
+        # Save snapshot on disconnect (not on intentional end)
         if session_id:
-            async with AsyncSessionLocal() as db:
-                await SessionStore.end_session(db, session_id)
+            try:
+                async with AsyncSessionLocal() as db:
+                    state = await SessionStore.get_session_state(db, session_id)
+                    if state:
+                        import uuid
+                        snap = SessionSnapshot(id=str(uuid.uuid4()), session_id=session_id, state_data=state)
+                        db.add(snap)
+                        await db.commit()
+                        logger.info(f"[{session_id}] Snapshot saved")
+            except:
+                pass
         try:
             await websocket.close()
         except:
             pass
-        logger.info(f"[{session_id}] Session cleaned up")
+        logger.info(f"[{session_id}] Cleaned up (frames={frame_count})")
 
 
-async def handle_tool_call(tc: dict, session_id: str, gemini_ws, client_ws: WebSocket):
-    """Handle Gemini tool calls (function calling)."""
+async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
     calls = tc.get("functionCalls", [])
     responses = []
-
     for call in calls:
-        fn_name = call.get("name")
-        fn_id = call.get("id")
-        fn_args = call.get("args", {})
-        logger.info(f"[{session_id}] Tool call: {fn_name}({json.dumps(fn_args)[:100]})")
-
-        # Notify client
-        await client_ws.send_json({"type": "tool.status", "tool": fn_name, "status": "running", "args": fn_args})
+        fn = call.get("name")
+        fid = call.get("id")
+        args = call.get("args", {})
+        logger.info(f"[{session_id}] Tool: {fn}({json.dumps(args)[:100]})")
+        await client_ws.send_json({"type": "tool.status", "tool": fn, "status": "running", "args": args})
 
         result = {}
-        if fn_name == "lookup_manual":
+        if fn == "lookup_manual":
             async with AsyncSessionLocal() as db:
-                result = await lookup_manual_tool(
-                    db, session_id,
-                    brand=fn_args.get("brand", ""),
-                    model=fn_args.get("model", ""),
-                    device_type=fn_args.get("device_type", ""),
-                    issue=fn_args.get("issue", ""),
-                    query=fn_args.get("query", ""),
-                )
-                # Update session with active manual
+                result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
                 if result.get("selected_manual_id"):
-                    await SessionStore.update_session(db, session_id,
-                        active_manual_id=result["selected_manual_id"],
-                        active_device_type=fn_args.get("device_type", ""),
-                        active_device_model=fn_args.get("model", ""),
-                    )
+                    await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
         else:
-            result = {"error": f"Unknown tool: {fn_name}"}
+            result = {"error": f"Unknown tool: {fn}"}
 
-        responses.append({"id": fn_id, "name": fn_name, "response": result})
-
-        # Notify client of result
+        responses.append({"id": fid, "name": fn, "response": result})
         await client_ws.send_json({
-            "type": "tool.status", "tool": fn_name, "status": "done",
+            "type": "tool.status", "tool": fn, "status": "done",
             "result_summary": result.get("manual_summary", ""),
             "manual_id": result.get("selected_manual_id"),
             "warnings": result.get("warnings", []),
-            "steps": result.get("troubleshooting_steps", [])[:3],
+            "steps": result.get("troubleshooting_steps", [])[:5],
         })
 
-    # Send tool response back to Gemini
-    tool_resp = {
-        "toolResponse": {
-            "functionResponses": [
-                {"id": r["id"], "name": r["name"], "response": r["response"]}
-                for r in responses
-            ]
-        }
-    }
-    await gemini_ws.send(json.dumps(tool_resp))
-    logger.info(f"[{session_id}] Tool response sent to Gemini")
+    await gemini_ws.send(json.dumps({
+        "toolResponse": {"functionResponses": [{"id": r["id"], "name": r["name"], "response": r["response"]} for r in responses]}
+    }))
+    logger.info(f"[{session_id}] Tool response → Gemini")
 
 
 if __name__ == "__main__":
