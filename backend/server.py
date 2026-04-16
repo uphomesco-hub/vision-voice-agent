@@ -46,6 +46,17 @@ def compute_frame_diff(prev_bytes, curr_bytes):
     except Exception:
         return 0.0
 
+# ─── Perception state cache (survives WS reconnects within same process) ───
+_perception_cache: Dict[str, Dict[str, Any]] = {}  # session_id → {last_perception, last_perception_sig, prev_frame_bytes}
+
+def _get_perception_state(sid: str) -> Dict[str, Any]:
+    if sid not in _perception_cache:
+        _perception_cache[sid] = {"last_perception": None, "last_perception_sig": "", "prev_frame_bytes": None}
+    return _perception_cache[sid]
+
+def _clear_perception_state(sid: str):
+    _perception_cache.pop(sid, None)
+
 LOOKUP_MANUAL_DECL = {
     "name": "lookup_manual",
     "description": "Search internal repair manuals database for a specific device. Returns structured repair guidance, troubleshooting steps, warnings, and tool requirements. Use when the user identifies a device or a label/model becomes visible.",
@@ -144,11 +155,8 @@ async def ws_session(websocket: WebSocket):
     alive = True
     session_id = None
     frame_count = 0
-    prev_frame_bytes = None
     nudge = NudgeEngine()
     ai_speaking = False
-    last_perception: Optional[Dict[str, Any]] = None
-    last_perception_sig: str = ""
     intentional_end = False
 
     try:
@@ -392,23 +400,24 @@ async def ws_session(websocket: WebSocket):
 
                     # Frame-diff nudge: only trigger when the scene actually changes
                     curr_bytes = base64.b64decode(raw_b64)
+                    pstate = _get_perception_state(session_id)
 
-                    if prev_frame_bytes and not ai_speaking:
-                        diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
+                    if pstate["prev_frame_bytes"] and not ai_speaking:
+                        diff = compute_frame_diff(pstate["prev_frame_bytes"], curr_bytes)
                         if diff >= DIFF_THRESHOLD and nudge.should_nudge("vision_check", ""):
                             # Fire perception off the main loop to avoid blocking frame intake
                             _snap_b64 = raw_b64
                             _snap_sid = session_id
                             _snap_diff = diff
                             async def _run_perception():
-                                nonlocal last_perception, last_perception_sig
+                                ps = _get_perception_state(_snap_sid)
                                 async def _ws_send(msg):
                                     try:
                                         await websocket.send_json(msg)
                                     except Exception:
                                         pass
                                 try:
-                                    obs = await perceive_scene(_snap_b64, prior_obs=last_perception)
+                                    obs = await perceive_scene(_snap_b64, prior_obs=ps["last_perception"])
                                     if obs is None:
                                         logger.info(f"[{_snap_sid}] perception failed, skipping nudge")
                                         await _ws_send({"type": "vision.perception", "status": "failed", "diff": round(_snap_diff, 1)})
@@ -419,7 +428,7 @@ async def ws_session(websocket: WebSocket):
                                     safety = (obs.get("safety_concern") or "").strip()
 
                                     # Skip if low confidence or nothing new (safety always passes)
-                                    if not safety and (confidence < 0.5 or not changes) and sig == last_perception_sig:
+                                    if not safety and (confidence < 0.5 or not changes) and sig == ps["last_perception_sig"]:
                                         logger.info(f"[{_snap_sid}] perception stable (conf={confidence:.2f}), no narration")
                                         await _ws_send({
                                             "type": "vision.perception", "status": "stable",
@@ -428,8 +437,8 @@ async def ws_session(websocket: WebSocket):
                                         return
                                     if not safety and (confidence < 0.5 or not changes):
                                         if confidence >= 0.5:
-                                            last_perception = obs
-                                            last_perception_sig = sig
+                                            ps["last_perception"] = obs
+                                            ps["last_perception_sig"] = sig
                                         logger.info(f"[{_snap_sid}] perception: no new changes (conf={confidence:.2f})")
                                         await _ws_send({
                                             "type": "vision.perception", "status": "no_change",
@@ -438,9 +447,10 @@ async def ws_session(websocket: WebSocket):
                                         return
 
                                     # Good observation with changes — update prior
+                                    # Good observation with changes — update prior
                                     if confidence >= 0.5:
-                                        last_perception = obs
-                                        last_perception_sig = sig
+                                        ps["last_perception"] = obs
+                                        ps["last_perception_sig"] = sig
 
                                     # Build step context if a manual is active
                                     step_context = ""
@@ -489,7 +499,7 @@ async def ws_session(websocket: WebSocket):
 
                             asyncio.create_task(_run_perception())
 
-                    prev_frame_bytes = curr_bytes
+                    pstate["prev_frame_bytes"] = curr_bytes
                     if frame_count % 10 == 0:
                         logger.info(f"[{session_id}] Frames sent: {frame_count}")
 
@@ -565,6 +575,8 @@ async def ws_session(websocket: WebSocket):
         except:
             pass
         logger.info(f"[{session_id}] Cleaned up (frames={frame_count})")
+        if intentional_end and session_id:
+            _clear_perception_state(session_id)
 
 
 async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
