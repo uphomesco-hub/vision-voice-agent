@@ -83,7 +83,7 @@ async def voice_session(websocket: WebSocket):
             max_size=16 * 1024 * 1024,  # 16MB max message
         )
 
-        # Send setup message
+        # Send setup message with context compression for long sessions
         setup_msg = {
             "setup": {
                 "model": f"models/{MODEL_ID}",
@@ -99,7 +99,10 @@ async def voice_session(websocket: WebSocket):
                 },
                 "system_instruction": {
                     "parts": [{"text": system_instruction}]
-                }
+                },
+                "session_resumption": {},
+                "input_audio_transcription": {},
+                "output_audio_transcription": {}
             }
         }
         await gemini_ws.send(json.dumps(setup_msg))
@@ -189,9 +192,9 @@ async def voice_session(websocket: WebSocket):
         # Main loop: receive from client, forward to Gemini
         while session_alive:
             try:
-                raw = await asyncio.wait_for(websocket.receive_text(), timeout=300)
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=900)
             except asyncio.TimeoutError:
-                await websocket.send_json({"type": "error", "message": "Session timeout (5 min idle)"})
+                await websocket.send_json({"type": "error", "message": "Session timeout (15 min idle)"})
                 break
 
             if not session_alive:
