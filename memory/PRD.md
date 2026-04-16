@@ -1,64 +1,73 @@
 # Voice-First Realtime Repair Assistant - PRD
 
 ## Original Problem Statement
-Build a web-based, voice-first realtime repair assistant. The app requires a Python/FastAPI backend, a realtime agent worker using `livekit-agents` with the Gemini Live API (`livekit-plugins-google`) and Google Search grounding, a local LiveKit server, SQLite persistence, and a React frontend with a dark-theme UI.
+Build a web-based, voice-first realtime repair assistant with voice and vision capabilities, powered by Gemini Live API.
 
-## Architecture
+## Architecture (v2 - Direct Gemini Live)
 ```
-Frontend (React, port 3000) → K8s Ingress → Backend (FastAPI, port 8001)
-                                                  ↓ WebSocket proxy
-                                            LiveKit Server (port 7880)
-                                                  ↓
-                                            Agent Worker (Gemini Live API)
+Browser (mic + camera)
+    ↕ WebSocket (JSON + base64 audio)
+FastAPI Backend (/api/ws/session)
+    ↕ WebSocket (google-genai SDK)
+Gemini Live API (gemini-2.5-flash-preview-native-audio-dialog)
 ```
+
+**No LiveKit, no WebRTC** — pure WebSocket streaming. Works through any HTTP proxy/ingress.
 
 ## Tech Stack
-- **Frontend**: React 19, CSS (dark theme), livekit-client
-- **Backend**: FastAPI, SQLAlchemy (SQLite), livekit-agents, livekit-plugins-google
-- **Voice**: LiveKit Server (local), Gemini Live API via Emergent LLM Key
-- **Database**: SQLite (sessions, session_turns)
+- **Frontend**: React 19, CSS (dark theme), browser AudioContext + getUserMedia
+- **Backend**: FastAPI, google-genai SDK (v1.71.0)
+- **Voice**: Gemini Live API (native audio dialog model)
+- **API Key**: Emergent LLM Key (GOOGLE_API_KEY)
 
 ## Key API Endpoints
-- `GET /api/health` - Health check
-- `GET /api/personas` - List assistant personas
-- `GET /api/voices` - List available voices
-- `POST /api/sessions` - Create voice session
-- `POST /api/sessions/{id}/token` - Get LiveKit token (returns wss:// proxy URL)
-- `GET /api/sessions/{id}/state` - Get session state + transcript
-- `POST /api/sessions/{id}/end` - End session
-- `WS /api/livekit-ws/{path}` - WebSocket proxy to LiveKit server
+- `GET /api/health` - Health check (returns model name + mode)
+- `GET /api/personas` - List assistant personas (4)
+- `GET /api/voices` - List voices (Puck, Charon, Kore, Aoede, Fenrir)
+- `WS /api/ws/session` - Main voice session WebSocket
 
-## DB Schema
-- `sessions`: id, persona_id, voice_id, status, room_name, created_at, updated_at
-- `session_turns`: id, session_id, role, text, created_at
+## WebSocket Protocol (/api/ws/session)
+**Client → Server:**
+- `{ "type": "config", "persona_id": "...", "voice_id": "..." }` (first message)
+- `{ "type": "audio", "data": "<base64 PCM16 16kHz>" }`
+- `{ "type": "video", "data": "<base64 JPEG>" }`
+- `{ "type": "text", "content": "..." }`
+- `{ "type": "end" }`
 
-## What's Implemented (Step 1 MVP) - April 16, 2026
-- [x] FastAPI backend with all API endpoints
-- [x] SQLite database with sessions and turns tables
-- [x] LiveKit token generation
-- [x] Personas and voices registries
-- [x] Local LiveKit server (v1.10.1, ARM64)
-- [x] Agent worker with Gemini Live API plugin
-- [x] React frontend with dark-theme UI (cinematic sentinel design)
-- [x] Frontend-backend API connectivity (REACT_APP_BACKEND_URL)
-- [x] WebSocket proxy for LiveKit signaling through K8s ingress
-- [x] HTTP reverse proxy for LiveKit API endpoints (validates, etc.)
-- [x] Cleaned up stale vanilla HTML, setupProxy.js, client-side prototype
-- [x] Improved error handling with connection timeout and clear messages
+**Server → Client:**
+- `{ "type": "status", "message": "..." }`
+- `{ "type": "audio", "data": "<base64 PCM16 24kHz>" }`
+- `{ "type": "transcription", "role": "user|assistant", "text": "..." }`
+- `{ "type": "turn_complete" }`
+- `{ "type": "interrupted" }`
+- `{ "type": "error", "message": "..." }`
 
-## Known Limitation
-WebRTC media (audio/video) requires direct UDP/TCP connectivity between the browser and LiveKit server. The K8s preview environment only exposes HTTP/HTTPS/WebSocket through its ingress, so while signaling works through the proxy, the actual voice media channel cannot be established. Solutions:
-1. Use LiveKit Cloud (handles networking automatically)
-2. Deploy to an environment with direct port access
-3. Configure an external TURN relay server
+## What's Implemented - April 16, 2026
+
+### v2 Rebuild (Direct Gemini Live)
+- [x] FastAPI backend with Gemini Live API WebSocket proxy
+- [x] Browser mic capture (PCM16 16kHz) via ScriptProcessor
+- [x] Audio playback (PCM16 24kHz) via AudioContext
+- [x] Real-time transcriptions (input + output)
+- [x] Turn detection + interruption handling
+- [x] Dark theme UI (cinematic sentinel design)
+- [x] Persona and voice selection
+- [x] Session lifecycle management
+
+### v1 (Removed)
+- ~~LiveKit server~~ (removed - WebRTC not needed)
+- ~~Agent worker~~ (removed - Gemini called directly)
+- ~~WebSocket/HTTP proxy for LiveKit~~ (removed)
 
 ## Backlog
 
-### P1 - UI State Feedback
-- Add "Listening", "Thinking", "Replying" visual indicators based on LiveKit agent state events
+### P1 - UI Enhancements
+- Visual state indicators (Listening/Thinking/Speaking animations)
+- Camera/Vision toggle for repair inspection
 
-### P2 - Step 2 Features (Future)
-- Camera/Vision capabilities
-- Manual lookup tool
+### P2 - Step 2 Features
+- Camera frame streaming for visual diagnosis
+- Manual lookup tool integration
 - Warnings/repair observations panel
 - Repair-step panel
+- Session history/persistence
