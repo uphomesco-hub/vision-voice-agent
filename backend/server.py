@@ -30,8 +30,8 @@ GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativ
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
-DIFF_THRESHOLD = 12.0  # Mean pixel diff (0-255) to count as "scene changed"
-DIFF_COOLDOWN_FRAMES = 3  # Min frames between nudges (~6s at 2s/frame)
+DIFF_THRESHOLD = 28.0  # Raised: only significant scene changes (flip, open, remove)
+DIFF_COOLDOWN_FRAMES = 4  # Min frames between nudges (~8s at 2s/frame)
 
 def compute_frame_diff(prev_bytes, curr_bytes):
     """Compare two JPEG blobs as tiny grayscale thumbnails. Returns mean pixel diff 0-255."""
@@ -394,7 +394,7 @@ async def ws_session(websocket: WebSocket):
                             frames_since_nudge = 0
                             await gemini_ws.send(json.dumps({
                                 "clientContent": {
-                                    "turns": [{"role": "user", "parts": [{"text": "The scene just changed. What do you see now?"}]}],
+                                    "turns": [{"role": "user", "parts": [{"text": "Describe exactly what you see in the camera right now."}]}],
                                     "turnComplete": True
                                 }
                             }))
