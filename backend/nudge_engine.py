@@ -20,7 +20,7 @@ DEFAULT_COOLDOWNS = {
     "internals_visible": 30,
     "angle_hint": 90,  # Very slow — don't nag about framing
     "label_text_change": 20,
-    "vision_check": 5,  # Fast nudges with Flash grounding
+    "vision_check": 2,  # Rapid with Flash grounding — no hallucination risk
 }
 
 # Grace period after user speaks before allowing visual nudges (seconds)
