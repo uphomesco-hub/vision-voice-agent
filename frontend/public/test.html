@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Voice App</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #131313; color: #fff; }
+        button { padding: 15px 30px; margin: 10px; font-size: 16px; cursor: pointer; border-radius: 8px; border: none; }
+        .primary { background: linear-gradient(135deg, #ffb4a9, #ff5543); color: #fff; }
+        .danger { background: #ff3520; color: #fff; }
+        #status { padding: 15px; margin: 20px 0; background: #1f1f1f; border-radius: 8px; }
+        #transcript { padding: 15px; background: #1f1f1f; border-radius: 8px; max-height: 300px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>🎙️ Voice Assistant Test</h1>
+    <div id="status">Status: Ready</div>
+    
+    <button class="primary" onclick="startSession()">Start Session</button>
+    <button class="danger" onclick="endSession()" disabled id="endBtn">End Session</button>
+    
+    <h3>Transcript:</h3>
+    <div id="transcript"></div>
+    
+    <script src="https://unpkg.com/livekit-client@2.9.1/dist/livekit-client.umd.min.js"></script>
+    <script>
+        const API_URL = 'http://localhost:8001/api';
+        let room = null;
+        let sessionId = null;
+        
+        function updateStatus(msg) {
+            document.getElementById('status').textContent = 'Status: ' + msg;
+        }
+        
+        function addTranscript(role, text) {
+            const div = document.createElement('div');
+            div.style.margin = '10px 0';
+            div.style.padding = '10px';
+            div.style.background = role === 'user' ? '#2a2a2a' : 'rgba(255,180,169,0.1)';
+            div.style.borderRadius = '8px';
+            div.innerHTML = `<strong>${role.toUpperCase()}:</strong> ${text}`;
+            document.getElementById('transcript').appendChild(div);
+        }
+        
+        async function startSession() {
+            try {
+                updateStatus('Creating session...');
+                
+                const sessionResp = await fetch(`${API_URL}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ persona_id: 'calm-expert', voice_id: 'puck' })
+                });
+                const session = await sessionResp.json();
+                sessionId = session.id;
+                
+                updateStatus('Getting token...');
+                const tokenResp = await fetch(`${API_URL}/sessions/${sessionId}/token`, {
+                    method: 'POST'
+                });
+                const tokenData = await tokenResp.json();
+                
+                updateStatus('Requesting microphone...');
+                await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                updateStatus('Connecting to LiveKit...');
+                room = new LivekitClient.Room();
+                
+                room.on('trackSubscribed', (track) => {
+                    if (track.kind === 'audio') {
+                        track.attach();
+                        updateStatus('Agent speaking...');
+                    }
+                });
+                
+                room.on('trackUnsubscribed', () => {
+                    updateStatus('Listening...');
+                });
+                
+                await room.connect(tokenData.livekit_url, tokenData.token);
+                await room.localParticipant.setMicrophoneEnabled(true);
+                
+                updateStatus('Connected! Listening...');
+                document.getElementById('endBtn').disabled = false;
+                addTranscript('system', 'Session started - speak now!');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                updateStatus('Error: ' + error.message);
+            }
+        }
+        
+        async function endSession() {
+            if (room) {
+                await room.disconnect();
+                room = null;
+            }
+            if (sessionId) {
+                await fetch(`${API_URL}/sessions/${sessionId}/end`, { method: 'POST' });
+            }
+            updateStatus('Session ended');
+            document.getElementById('endBtn').disabled = true;
+        }
+    </script>
+</body>
+</html>

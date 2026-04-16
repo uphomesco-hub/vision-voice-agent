@@ -9,26 +9,22 @@ def generate_token(room_name: str, participant_identity: str, participant_name: 
     Generate a LiveKit access token for a participant.
     """
     try:
+        # Create grants
+        grants = api.VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True
+        )
+        
+        # Create token with method chaining
         token = api.AccessToken(
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret
-        )
+        ).with_identity(participant_identity).with_name(participant_name).with_grants(grants)
         
-        token.identity = participant_identity
-        token.name = participant_name
-        
-        # Grant permissions
-        token.add_grant(
-            api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=True,
-                can_subscribe=True,
-                can_publish_data=True
-            )
-        )
-        
-        # Token valid for 1 hour
+        # Generate JWT
         jwt_token = token.to_jwt()
         
         logger.info(f"Generated token for {participant_identity} in room {room_name}")
