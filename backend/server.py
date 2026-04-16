@@ -6,14 +6,16 @@ import logging
 import asyncio
 import json
 import os
+import base64
+import io
 import websockets
 from datetime import datetime, timezone
+from PIL import Image
 
 from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
 from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
-from nudge_engine import NudgeEngine
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(name)s] %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -25,6 +27,21 @@ GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
 MODEL_ID = "gemini-2.5-flash-native-audio-latest"
 INPUT_SAMPLE_RATE = 16000
 GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
+
+# ─── Frame Diff ──────────────────────
+DIFF_THUMB_SIZE = (32, 32)
+DIFF_THRESHOLD = 12.0  # Mean pixel diff (0-255) to count as "scene changed"
+DIFF_COOLDOWN_FRAMES = 3  # Min frames between nudges (~6s at 2s/frame)
+
+def compute_frame_diff(prev_bytes, curr_bytes):
+    """Compare two JPEG blobs as tiny grayscale thumbnails. Returns mean pixel diff 0-255."""
+    try:
+        prev = Image.open(io.BytesIO(prev_bytes)).convert("L").resize(DIFF_THUMB_SIZE)
+        curr = Image.open(io.BytesIO(curr_bytes)).convert("L").resize(DIFF_THUMB_SIZE)
+        pp, cp = list(prev.getdata()), list(curr.getdata())
+        return sum(abs(a - b) for a, b in zip(pp, cp)) / len(pp)
+    except Exception:
+        return 0.0
 
 LOOKUP_MANUAL_DECL = {
     "name": "lookup_manual",
@@ -124,7 +141,10 @@ async def ws_session(websocket: WebSocket):
     alive = True
     session_id = None
     frame_count = 0
-    intentional_end = False  # Track if user clicked End
+    prev_frame_bytes = None
+    frames_since_nudge = 999  # Start high so first change triggers
+    ai_speaking = False
+    intentional_end = False
 
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -241,7 +261,7 @@ async def ws_session(websocket: WebSocket):
 
         # ─── Gemini → Client ───
         async def recv_gemini():
-            nonlocal alive
+            nonlocal alive, ai_speaking
             user_buf = ""
             asst_buf = ""
             try:
@@ -264,6 +284,7 @@ async def ws_session(websocket: WebSocket):
                         # Audio
                         mt = sc.get("modelTurn")
                         if mt and mt.get("parts"):
+                            ai_speaking = True
                             await websocket.send_json({"type": "assistant.state", "state": "speaking"})
                             for p in mt["parts"]:
                                 idata = p.get("inlineData")
@@ -291,10 +312,12 @@ async def ws_session(websocket: WebSocket):
                                 logger.info(f"[{session_id}] Google Search: {queries}")
 
                         if sc.get("interrupted"):
+                            ai_speaking = False
                             await websocket.send_json({"type": "interrupted"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
 
                         if sc.get("turnComplete"):
+                            ai_speaking = False
                             logger.info(f"[{session_id}] Turn complete")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
@@ -356,9 +379,28 @@ async def ws_session(websocket: WebSocket):
 
                 elif t == "video":
                     frame_count += 1
+                    raw_b64 = msg["data"]
                     await gemini_ws.send(json.dumps({
-                        "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": msg["data"]}]}
+                        "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": raw_b64}]}
                     }))
+
+                    # Frame-diff nudge: only trigger when the scene actually changes
+                    curr_bytes = base64.b64decode(raw_b64)
+                    frames_since_nudge += 1
+
+                    if prev_frame_bytes and frames_since_nudge >= DIFF_COOLDOWN_FRAMES and not ai_speaking:
+                        diff = compute_frame_diff(prev_frame_bytes, curr_bytes)
+                        if diff >= DIFF_THRESHOLD:
+                            frames_since_nudge = 0
+                            await gemini_ws.send(json.dumps({
+                                "clientContent": {
+                                    "turns": [{"role": "user", "parts": [{"text": "The scene just changed. What do you see now?"}]}],
+                                    "turnComplete": True
+                                }
+                            }))
+                            logger.info(f"[{session_id}] Scene change detected (diff={diff:.1f}), nudge sent")
+
+                    prev_frame_bytes = curr_bytes
                     if frame_count % 10 == 0:
                         logger.info(f"[{session_id}] Frames sent: {frame_count}")
 
