@@ -1,6 +1,6 @@
 """
 LiveKit Agent Worker for Realtime Repair Assistant
-Step 1: Voice only with Gemini + Google Search grounding
+Step 1: Voice only with Gemini Live API + Google Search grounding
 """
 
 import logging
@@ -8,8 +8,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 from livekit import agents
 from livekit.agents import AgentServer, AgentSession, Agent, JobContext
-from livekit.plugins import silero
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livekit.plugins import google
 
 # Load environment
 ROOT_DIR = Path(__file__).parent
@@ -26,10 +25,10 @@ logger = logging.getLogger(__name__)
 from prompts import build_agent_prompt
 
 class RepairAssistant(Agent):
-    """Voice-first repair troubleshooting assistant."""
+    """Voice-first repair troubleshooting assistant using Gemini Live API."""
     
     def __init__(self, persona_id: str = "calm-expert", voice_id: str = "Puck"):
-        # Build system prompt
+        # Build system prompt with Google Search grounding instructions
         system_prompt = build_agent_prompt(persona_id, voice_id)
         
         super().__init__(
@@ -46,27 +45,22 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     """
     Main entrypoint - called when participant joins room.
+    Uses Gemini Live API with native audio for realtime voice interaction.
     """
     logger.info(f"Agent session starting for room: {ctx.room.name}")
     
-    # Create session with Gemini
-    # Note: Using OpenAI temporarily as Gemini plugin requires google.generativeai
-    # Google Search grounding will be enabled through proper plugin setup
+    # Create session with Gemini Live API
+    # This uses the RealtimeModel which supports:
+    # - Native audio input/output
+    # - Google Search grounding (via model capabilities)
+    # - Low latency streaming
     session = AgentSession(
-        # STT - Speech to Text
-        stt="deepgram/nova-3:multi",
-        
-        # LLM - Using OpenAI as placeholder (replace with google plugin when available)
-        llm="openai/gpt-4o-mini",
-        
-        # TTS - Text to Speech  
-        tts="openai/tts-1:alloy",
-        
-        # VAD - Voice Activity Detection
-        vad=silero.VAD.load(),
-        
-        # Turn detection
-        turn_detection=MultilingualModel(),
+        llm=google.realtime.RealtimeModel(
+            model="gemini-2.5-flash-native-audio",
+            voice="Puck",
+            temperature=0.8,
+            instructions=build_agent_prompt("calm-expert", "Puck"),
+        ),
     )
     
     # Start session
@@ -88,5 +82,5 @@ async def entrypoint(ctx: JobContext):
     logger.info("Agent session ready and greeting sent")
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting Repair Assistant Agent Worker...")
+    logger.info("🚀 Starting Repair Assistant Agent Worker with Gemini Live API...")
     agents.cli.run_app(server)
