@@ -20,7 +20,7 @@ DEFAULT_COOLDOWNS = {
     "internals_visible": 30,
     "angle_hint": 90,  # Very slow — don't nag about framing
     "label_text_change": 20,
-    "vision_check": 10,  # Balanced — avoid spam and context overflow
+    "vision_check": 20,  # Balanced — avoid spam and context overflow
 }
 
 # Grace period after user speaks before allowing visual nudges (seconds)
