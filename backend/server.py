@@ -402,11 +402,16 @@ async def ws_session(websocket: WebSocket):
                             _snap_diff = diff
                             async def _run_perception():
                                 nonlocal last_perception, last_perception_sig
+                                async def _ws_send(msg):
+                                    try:
+                                        await websocket.send_json(msg)
+                                    except Exception:
+                                        pass
                                 try:
                                     obs = await perceive_scene(_snap_b64, prior_obs=last_perception)
                                     if obs is None:
                                         logger.info(f"[{_snap_sid}] perception failed, skipping nudge")
-                                        await websocket.send_json({"type": "vision.perception", "status": "failed", "diff": round(_snap_diff, 1)})
+                                        await _ws_send({"type": "vision.perception", "status": "failed", "diff": round(_snap_diff, 1)})
                                         return
                                     sig = observation_signature(obs)
                                     confidence = float(obs.get("confidence", 0) or 0)
@@ -416,7 +421,7 @@ async def ws_session(websocket: WebSocket):
                                     # Skip if low confidence or nothing new (safety always passes)
                                     if not safety and (confidence < 0.5 or not changes) and sig == last_perception_sig:
                                         logger.info(f"[{_snap_sid}] perception stable (conf={confidence:.2f}), no narration")
-                                        await websocket.send_json({
+                                        await _ws_send({
                                             "type": "vision.perception", "status": "stable",
                                             "confidence": confidence, "device_state": obs.get("device_state", ""), "diff": round(_snap_diff, 1),
                                         })
@@ -426,7 +431,7 @@ async def ws_session(websocket: WebSocket):
                                             last_perception = obs
                                             last_perception_sig = sig
                                         logger.info(f"[{_snap_sid}] perception: no new changes (conf={confidence:.2f})")
-                                        await websocket.send_json({
+                                        await _ws_send({
                                             "type": "vision.perception", "status": "no_change",
                                             "confidence": confidence, "device_state": obs.get("device_state", ""), "diff": round(_snap_diff, 1),
                                         })
@@ -474,7 +479,7 @@ async def ws_session(websocket: WebSocket):
                                         }
                                     }))
                                     logger.info(f"[{_snap_sid}] VISION_UPDATE sent (conf={confidence:.2f}, changes={len(changes)})")
-                                    await websocket.send_json({
+                                    await _ws_send({
                                         "type": "vision.perception", "status": "update_sent",
                                         "confidence": confidence, "device_state": obs.get("device_state", ""),
                                         "changes": changes, "safety_concern": safety, "diff": round(_snap_diff, 1),
