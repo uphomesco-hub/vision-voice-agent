@@ -143,7 +143,7 @@ export default function RepairAssistant() {
         if (sessionIdRef.current) { m.resume_session_id = sessionIdRef.current; log('WS', `Resume ${sessionIdRef.current}`); }
         ws.send(JSON.stringify(m));
         if (heartbeatRef.current) clearInterval(heartbeatRef.current);
-        heartbeatRef.current = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat' })); }, 20000);
+        heartbeatRef.current = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'heartbeat' })); }, 15000);
         resolve(ws);
       };
       ws.onmessage = handleMsg;
@@ -224,7 +224,6 @@ export default function RepairAssistant() {
         <div className="ra-header-center"><h1 className="ra-app-title">Repair Assistant</h1></div>
         <div className="ra-header-right">
           {sessionId && <span className="ra-session-id" data-testid="session-id">{sessionId.slice(0, 8)}</span>}
-          <span className="ra-mode-badge" data-testid="mode-badge">Gemini Live</span>
         </div>
       </header>
 
