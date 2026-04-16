@@ -31,7 +31,7 @@ GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativ
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
-DIFF_THRESHOLD = 10.0  # Catch small changes
+DIFF_THRESHOLD = 18.0  # Filter jitter but catch real changes
 DIFF_COOLDOWN_FRAMES = 2
 
 def compute_frame_diff(prev_bytes, curr_bytes):
@@ -406,7 +406,7 @@ async def ws_session(websocket: WebSocket):
                                             current = steps_list[step_num]
                                             step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
 
-                            nudge_text = f"[OBSERVE] Describe what you see in the current frame right now in one natural sentence.{step_context} Comment on any change, even a small one — tilt, movement, part shift, new object. Name a specific visible feature. Do not invent actions; only describe what's actually in this frame. If truly identical to your last observation, say nothing."
+                            nudge_text = f"[OBSERVE] Describe what you see in the current frame right now in one natural sentence.{step_context} Comment on any change, even a small one — tilt, movement, part shift, new object. Name a specific visible feature. Do not invent actions; only describe what's actually in this frame. If nothing meaningful changed, produce NO audio — complete silence. NEVER say 'no visible movement', 'nothing changed', or 'the view is unchanged'."
 
                             await gemini_ws.send(json.dumps({
                                 "clientContent": {
