@@ -1,0 +1,57 @@
+{
+  "id": "stihl-fs56rc",
+  "brand": "Stihl",
+  "model": "FS 56 RC",
+  "device_type": "string trimmer",
+  "title": "Stihl FS 56 RC String Trimmer - Repair & Troubleshooting Manual",
+  "aliases": ["stihl trimmer", "fs56", "fs 56", "weed eater", "weed whacker", "line trimmer"],
+  "issue_keywords": ["won't start", "dies", "bogs down", "no power", "string feed", "vibration", "overheating", "fuel leak", "primer bulb", "spark plug"],
+  "tools_required": ["T27 Torx screwdriver", "flat-head screwdriver", "13mm socket wrench", "needle-nose pliers", "spark plug wrench", "fuel line tool"],
+  "warnings": [
+    "Always disconnect the spark plug wire before servicing.",
+    "Do not smoke or use open flames near fuel system.",
+    "Allow engine to cool completely before touching exhaust or cylinder.",
+    "Wear safety glasses when working with springs and clips.",
+    "Never run the engine without the air filter installed."
+  ],
+  "visual_recognition_cues": ["orange/white housing", "curved shaft", "Stihl logo on starter cover", "primer bulb on side", "bump-feed trimmer head"],
+  "inspection_prompts_for_agent": [
+    "Can you see the air filter cover on the side of the engine?",
+    "Is the primer bulb cracked or discolored?",
+    "Can you read the model number on the data plate?",
+    "Does the starter rope pull freely or feel stuck?",
+    "Is there visible fuel in the primer bulb when you press it?"
+  ],
+  "external_anatomy": {
+    "top": "Handle with throttle trigger and safety lock",
+    "left_side": "Air filter cover, choke lever",
+    "right_side": "Starter rope, muffler/exhaust",
+    "bottom": "Trimmer head with bump-feed spool",
+    "rear": "Fuel tank with fuel cap"
+  },
+  "disassembly_steps": [
+    {"step": 1, "action": "Remove spark plug wire", "warning": "Essential safety step"},
+    {"step": 2, "action": "Remove air filter cover (2 screws or clips)", "tool": "T27 Torx"},
+    {"step": 3, "action": "Remove air filter element and inspect", "note": "Replace if torn or heavily soiled"},
+    {"step": 4, "action": "Remove starter housing (3 T27 screws)", "note": "Watch for the rope pulley spring"},
+    {"step": 5, "action": "Access carburetor by removing the air filter base plate", "tool": "T27 Torx"}
+  ],
+  "troubleshooting_steps": [
+    {"step": 1, "title": "Check fuel and primer", "action": "Ensure fresh fuel mix (50:1). Press primer bulb 5-6 times until fuel is visible.", "condition": "If primer doesn't fill, suspect fuel line or tank vent."},
+    {"step": 2, "title": "Check spark plug", "action": "Remove spark plug with wrench. Inspect for carbon buildup, correct gap (0.020 in). Replace if electrode is worn.", "condition": "If no spark, check ignition module."},
+    {"step": 3, "title": "Check air filter", "action": "Remove air filter cover. Inspect filter element. Clean or replace if dirty.", "condition": "A clogged filter causes rich running and bogging."},
+    {"step": 4, "title": "Check fuel filter and lines", "action": "Pull fuel filter from inside tank using a hooked wire. Inspect lines for cracks.", "condition": "Hardened or cracked lines cause air leaks and starting issues."},
+    {"step": 5, "title": "Check carburetor", "action": "If previous steps don't resolve, the carburetor may need cleaning or rebuild. Remove and disassemble carefully.", "condition": "Common after long storage with old fuel."},
+    {"step": 6, "title": "Check exhaust/muffler screen", "action": "Remove muffler. Check spark arrestor screen for carbon buildup. Clean with wire brush.", "condition": "Blocked screen causes power loss and overheating."}
+  ],
+  "success_signs": ["Engine starts within 3-5 pulls", "Idles smoothly without dying", "Accelerates cleanly without bogging", "No excessive smoke or vibration"],
+  "stop_conditions": ["Cracked cylinder or piston scoring visible", "Crankshaft bearings have excessive play", "Ignition module failure confirmed"],
+  "follow_up_questions": ["When did the problem start?", "Have you changed the fuel recently?", "Does it start briefly then die, or not start at all?", "Any unusual sounds when pulling the starter?"],
+  "hidden_fasteners": ["Air filter cover has hidden clip at bottom", "Muffler has one hidden screw under the heat shield"],
+  "common_failures": [
+    {"issue": "Won't start after storage", "likely_cause": "Stale fuel clogging carburetor", "fix": "Drain old fuel, clean carb, fresh 50:1 mix"},
+    {"issue": "Starts then dies", "likely_cause": "Fuel delivery — clogged filter or cracked fuel line", "fix": "Replace fuel filter and lines"},
+    {"issue": "Bogs down at full throttle", "likely_cause": "Clogged air filter or exhaust screen", "fix": "Clean/replace air filter, clean spark arrestor"}
+  ],
+  "notes": "The FS 56 RC uses the Easy2Start system. Always use Stihl 2-cycle oil or equivalent at 50:1 ratio."
+}

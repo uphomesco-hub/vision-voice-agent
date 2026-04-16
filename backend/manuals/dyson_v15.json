@@ -1,0 +1,58 @@
+{
+  "id": "dyson-v15",
+  "brand": "Dyson",
+  "model": "V15 Detect",
+  "device_type": "cordless vacuum",
+  "title": "Dyson V15 Detect Cordless Vacuum - Repair & Troubleshooting Manual",
+  "aliases": ["dyson v15", "dyson detect", "dyson stick vacuum", "dyson cordless", "v15 detect"],
+  "issue_keywords": ["no suction", "won't turn on", "pulsing", "battery dies fast", "brush bar not spinning", "blockage", "filter light", "red light flashing", "laser not working", "bin full"],
+  "tools_required": ["Torx T8 screwdriver", "Torx T10 screwdriver", "Phillips #1 screwdriver", "coin (for filter cap)", "soft brush for cleaning"],
+  "warnings": [
+    "Always remove the battery before disassembly.",
+    "Do not wash any electrical components or the motor.",
+    "Allow filters to dry completely (24 hours) before reinstalling.",
+    "Do not use compressed air on the laser diode module.",
+    "The battery contains lithium cells — do not puncture or expose to heat."
+  ],
+  "visual_recognition_cues": ["gold/nickel cyclone assembly", "green laser cleaner head", "LCD screen on top", "Dyson logo on main body", "click-in battery at base"],
+  "inspection_prompts_for_agent": [
+    "Can you see the LCD screen on top of the body?",
+    "Is there any blockage visible in the clear bin?",
+    "What color is the light ring around the trigger?",
+    "Can you see the green laser light when the floor head is on?",
+    "Does the brush bar spin freely when you rotate it by hand?"
+  ],
+  "external_anatomy": {
+    "top": "LCD performance screen showing suction power and dust count",
+    "body": "Main motor unit with cyclone assembly (gold/nickel)",
+    "bottom": "Click-in battery pack",
+    "front": "Clear dust bin with red release lever",
+    "attachment": "Laser Slim Fluffy cleaner head with green laser"
+  },
+  "disassembly_steps": [
+    {"step": 1, "action": "Remove battery by pressing the release button and sliding down", "warning": "Essential before any work"},
+    {"step": 2, "action": "Remove dust bin by pressing the red release button", "note": "Empty and rinse the bin"},
+    {"step": 3, "action": "Remove filter by turning counter-clockwise on top of cyclone", "note": "Wash under cold water only, dry 24h"},
+    {"step": 4, "action": "Remove cleaner head by pressing the red clip and pulling", "note": "Check brush bar for tangled hair/debris"},
+    {"step": 5, "action": "Access brush bar by turning the end cap with a coin", "tool": "Coin", "note": "Pull brush bar out and clean"}
+  ],
+  "troubleshooting_steps": [
+    {"step": 1, "title": "Check for blockages", "action": "Remove the wand and cleaner head. Look through the wand for blockages. Check the inlet at the body.", "condition": "Pulsing on/off usually means a blockage or full bin."},
+    {"step": 2, "title": "Clean the filter", "action": "Remove the filter from the top of the cyclone. Wash under cold running water until water runs clear. Let dry 24 hours.", "condition": "Filter light on LCD means filter needs cleaning. A wet filter will cause the vacuum to not work."},
+    {"step": 3, "title": "Check brush bar", "action": "Remove the cleaner head. Use a coin to turn the end cap and pull out the brush bar. Remove tangled hair and debris.", "condition": "If brush bar doesn't spin, check for obstructions or worn drive belt."},
+    {"step": 4, "title": "Check battery", "action": "Fully charge the battery (3.5 hours). If it still dies quickly, the battery may need replacement.", "condition": "Flashing red light = low battery. Solid red = fault. Blue LEDs show charge level."},
+    {"step": 5, "title": "Reset the machine", "action": "Remove battery for 30 seconds. Reattach. This can clear some electronic faults.", "condition": "Try this if the LCD shows error codes or the trigger is unresponsive."},
+    {"step": 6, "title": "Check laser module", "action": "The green laser is in the cleaner head. If not illuminating, ensure the head is fully clicked in. Check for debris on the laser lens.", "condition": "Laser only activates in Auto mode on hard floors."}
+  ],
+  "success_signs": ["Strong consistent suction", "Brush bar spins freely", "LCD shows normal dust count", "No pulsing or red lights", "Laser illuminates in Auto mode"],
+  "stop_conditions": ["Motor makes grinding noise even after clearing blockages", "Battery won't hold any charge after full cycle", "LCD displays persistent error code after reset", "Burning smell from motor unit"],
+  "follow_up_questions": ["Is the vacuum pulsing on and off, or completely dead?", "When did you last clean the filter?", "Does the LCD screen show anything?", "Which cleaning head are you using?"],
+  "hidden_fasteners": ["Battery has a hidden latch that requires firm push before slide", "Brush bar end cap requires coin — not a screw"],
+  "common_failures": [
+    {"issue": "Pulsing on and off", "likely_cause": "Blockage in wand or cleaner head, or bin full", "fix": "Clear blockage, empty bin, clean filter"},
+    {"issue": "No suction but motor runs", "likely_cause": "Clogged filter or bin not seated properly", "fix": "Wash filter (dry 24h), reseat bin until it clicks"},
+    {"issue": "Battery dies in 5 minutes", "likely_cause": "Battery degradation or always running on Max mode", "fix": "Use Auto mode. If still short, replace battery pack."},
+    {"issue": "Brush bar not spinning", "likely_cause": "Hair/string wrapped around bar, or worn belt", "fix": "Remove and clean brush bar. Check drive belt."}
+  ],
+  "notes": "The V15 Detect has a piezo sensor that counts dust particles displayed on the LCD. The green laser helps reveal fine dust on hard floors. Always use Auto mode for best battery life."
+}
