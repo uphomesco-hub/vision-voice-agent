@@ -8,9 +8,11 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
 FLASH_MODEL = "gemini-2.5-flash"
-FLASH_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{FLASH_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+def _get_flash_url():
+    key = os.environ.get('GOOGLE_API_KEY', '')
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{FLASH_MODEL}:generateContent?key={key}"
 
 PERCEPTION_PROMPT = """You are a cold visual observer. You do NOT converse. You ONLY describe what is literally visible in the given camera frame.
 
@@ -34,7 +36,7 @@ RULES — ABSOLUTE:
 
 async def perceive_scene(frame_b64: str, prior_obs: Optional[Dict[str, Any]] = None, timeout: float = 4.0) -> Optional[Dict[str, Any]]:
     """Run one Flash text call against the current frame. Returns parsed JSON dict or None on failure."""
-    if not GEMINI_API_KEY:
+    if not os.environ.get('GOOGLE_API_KEY', ''):
         logger.warning("perceive_scene: no API key")
         return None
 
@@ -59,7 +61,7 @@ async def perceive_scene(frame_b64: str, prior_obs: Optional[Dict[str, Any]] = N
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(FLASH_URL, json=payload)
+            r = await client.post(_get_flash_url(), json=payload)
             r.raise_for_status()
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
