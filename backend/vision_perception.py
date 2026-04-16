@@ -34,7 +34,7 @@ RULES — ABSOLUTE:
 - JSON only. No prose. No markdown."""
 
 
-async def perceive_scene(frame_b64: str, prior_obs: Optional[Dict[str, Any]] = None, timeout: float = 4.0) -> Optional[Dict[str, Any]]:
+async def perceive_scene(frame_b64: str, prior_obs: Optional[Dict[str, Any]] = None, timeout: float = 8.0) -> Optional[Dict[str, Any]]:
     """Run one Flash text call against the current frame. Returns parsed JSON dict or None on failure."""
     if not os.environ.get('GOOGLE_API_KEY', ''):
         logger.warning("perceive_scene: no API key")
