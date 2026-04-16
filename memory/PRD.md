@@ -42,7 +42,15 @@ Frontend (React, port 3000) → K8s Ingress → Backend (FastAPI, port 8001)
 - [x] React frontend with dark-theme UI (cinematic sentinel design)
 - [x] Frontend-backend API connectivity (REACT_APP_BACKEND_URL)
 - [x] WebSocket proxy for LiveKit signaling through K8s ingress
+- [x] HTTP reverse proxy for LiveKit API endpoints (validates, etc.)
 - [x] Cleaned up stale vanilla HTML, setupProxy.js, client-side prototype
+- [x] Improved error handling with connection timeout and clear messages
+
+## Known Limitation
+WebRTC media (audio/video) requires direct UDP/TCP connectivity between the browser and LiveKit server. The K8s preview environment only exposes HTTP/HTTPS/WebSocket through its ingress, so while signaling works through the proxy, the actual voice media channel cannot be established. Solutions:
+1. Use LiveKit Cloud (handles networking automatically)
+2. Deploy to an environment with direct port access
+3. Configure an external TURN relay server
 
 ## Backlog
 

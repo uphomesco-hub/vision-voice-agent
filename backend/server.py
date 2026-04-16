@@ -1,10 +1,12 @@
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from contextlib import asynccontextmanager
 import logging
 import asyncio
 import websockets
+import httpx
 
 from config import settings
 from db import get_db, init_db
@@ -186,6 +188,36 @@ async def end_session(
 
 # Include API router
 app.include_router(api_router)
+
+# HTTP reverse proxy for LiveKit (handles /rtc/v1/validate and other HTTP endpoints)
+@app.api_route("/api/livekit-ws/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+async def livekit_http_proxy(request: Request, path: str = ""):
+    """Proxy HTTP requests to local LiveKit server"""
+    query_string = request.scope.get("query_string", b"").decode()
+    target_url = f"http://localhost:7880/{path}"
+    if query_string:
+        target_url += f"?{query_string}"
+    
+    logger.info(f"LiveKit HTTP proxy: {request.method} -> {target_url}")
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            body = await request.body()
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers={k: v for k, v in request.headers.items() if k.lower() not in ("host", "connection")},
+                content=body if body else None,
+                timeout=30.0
+            )
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers)
+            )
+    except Exception as e:
+        logger.error(f"LiveKit HTTP proxy error: {e}")
+        raise HTTPException(status_code=502, detail=f"LiveKit proxy error: {str(e)}")
 
 # WebSocket proxy for LiveKit signaling
 @app.websocket("/api/livekit-ws/{path:path}")
