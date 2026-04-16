@@ -120,14 +120,21 @@ export default function RepairAssistant() {
         setStatus('Listening...');
       } else if (msg.type === 'error') {
         console.error('Server error:', msg.message);
-        setStatus('Error: ' + msg.message);
+        if (msg.message.includes('disconnected') || msg.message.includes('session ended')) {
+          setStatus('Session ended — click Start Session to reconnect');
+          setVoiceState('idle');
+          setIsConnected(false);
+          stopMicCapture();
+        } else {
+          setStatus('Error: ' + msg.message);
+        }
       }
     } catch (e) {
       console.error('WS message parse error:', e);
     }
   }, [playAudioChunk]);
 
-  // --- Mic Capture via AudioWorklet ---
+  // --- Mic Capture ---
   const startMicCapture = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -136,9 +143,9 @@ export default function RepairAssistant() {
       const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       audioContextRef.current = ctx;
 
-      // Use ScriptProcessor as fallback (widely supported)
       const source = ctx.createMediaStreamSource(stream);
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      // Use 8192 buffer (~512ms chunks) to reduce message frequency
+      const processor = ctx.createScriptProcessor(8192, 1, 1);
       
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -148,7 +155,11 @@ export default function RepairAssistant() {
           pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
         }
         const b64 = uint8ArrayToBase64(new Uint8Array(pcm16.buffer));
-        wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'audio', data: b64 }));
+        } catch (err) {
+          console.error('Error sending audio:', err);
+        }
       };
 
       source.connect(processor);
