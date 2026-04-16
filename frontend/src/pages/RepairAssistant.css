@@ -141,8 +141,8 @@
 
 /* ═══ SESSION LAYOUT ═══ */
 .ra-session-layout { display: flex; width: 100%; height: 100%; }
-.ra-camera-section { flex: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; min-width: 0; }
-.ra-camera-container { position: relative; width: 100%; height: 100%; }
+.ra-camera-section { flex: 1; position: relative; background: #000; display: flex; flex-direction: column; min-width: 0; }
+.ra-camera-container { position: relative; flex: 1; min-height: 0; }
 .ra-camera-feed { width: 100%; height: 100%; object-fit: cover; }
 .ra-camera-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; }
 
@@ -195,12 +195,13 @@
 .ra-message-content { color: var(--text-2); }
 .ra-message.assistant .ra-message-content { color: var(--text); }
 
-/* Controls Bar (only shown during session) */
-.ra-controls-bar { padding: 12px; background: var(--surface); border-top: 1px solid var(--border); flex-shrink: 0; }
-.ra-controls-layout { display: flex; align-items: center; justify-content: center; position: relative; }
-.ra-controls-side { flex: 1; display: flex; }
-.ra-controls-side.left { justify-content: flex-start; }
-.ra-controls-side.right { justify-content: flex-end; }
+/* Controls Bar — inside camera section, centered relative to camera */
+.ra-controls-bar {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 12px 16px; flex-shrink: 0;
+  background: rgba(17,17,17,0.85); backdrop-filter: blur(8px);
+  border-top: 1px solid var(--border);
+}
 .ra-controls-center { display: flex; gap: 10px; justify-content: center; }
 .ra-control-btn {
   width: 44px; height: 44px; border-radius: 50%; border: none;
@@ -232,11 +233,9 @@
   .ra-persona-carousel { display: block; }
   .ra-voice-list { max-width: 100%; }
   .ra-session-layout { flex-direction: column; }
-  .ra-info-section { width: 100%; height: 40vh; border-left: none; border-top: 1px solid var(--border); }
-  .ra-camera-section { height: 60vh; }
+  .ra-info-section { width: 100%; flex: none; height: 40vh; border-left: none; border-top: 1px solid var(--border); }
+  .ra-camera-section { flex: none; height: 60vh; }
   .ra-btn-init { border-radius: 8px; }
-  .ra-controls-layout { flex-wrap: wrap; gap: 8px; }
-  .ra-controls-side { flex: 0 0 auto; }
   .ra-control-label { display: none; }
   .ra-control-btn-text { width: 44px; padding: 0; border-radius: 50%; }
 }

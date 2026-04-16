@@ -311,50 +311,42 @@ export default function RepairAssistant() {
                 </div>
                 {visionStatus && <div className="ra-vision-status">{visionStatus}</div>}
               </div>
+              {/* Controls — inside camera section so they center relative to the camera like the aura */}
+              <div className="ra-controls-bar" data-testid="controls-bar">
+                <button className={`ra-control-btn ra-control-btn-text ${showTranscript ? 'active' : ''}`} onClick={() => setShowTranscript(!showTranscript)} data-testid="transcript-toggle-button">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
+                </button>
+                <div className="ra-controls-center">
+                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                  </button>
+                  <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                  <button className={`ra-control-btn ${cameraEnabled ? 'active' : ''}`} onClick={toggleCamera} data-testid="camera-toggle-button">
+                    {cameraEnabled ? (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                    ) : (
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="ra-info-section">
+            {showTranscript && <div className="ra-info-section">
               {toolActivity && <div className={`ra-panel ra-tool-panel ${toolActivity.status}`} data-testid="tool-panel"><div className="ra-panel-title">{toolActivity.tool === 'google_search' ? 'Google Search' : 'Tool Activity'}</div><div className="ra-tool-detail">{toolActivity.detail}</div>{toolActivity.status === 'running' && <div className="ra-tool-spinner"></div>}</div>}
               {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-title">Active Manual</div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
               {warnings.length > 0 && <div className="ra-panel ra-warnings-panel" data-testid="warnings-panel"><div className="ra-panel-title">Warnings</div>{warnings.slice(0, 3).map((w, i) => <div key={i} className="ra-warning-item">{w}</div>)}</div>}
               {steps.length > 0 && <div className="ra-panel ra-steps-panel" data-testid="steps-panel"><div className="ra-panel-title">Steps</div>{steps.map((s, i) => <div key={i} className="ra-step-item"><span className="ra-step-num">{s.step || i + 1}</span><div className="ra-step-content"><div className="ra-step-title">{s.title}</div>{s.action && <div className="ra-step-action">{s.action}</div>}</div></div>)}</div>}
-              {showTranscript && <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
+              <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
                 <div className="ra-panel-title">Conversation</div>
                 <div className="ra-transcript-messages">{transcript.map((t, i) => <div key={i} className={`ra-message ${t.role}`}><span className="ra-message-role">{t.role === 'user' ? 'YOU' : t.role === 'system' ? 'SYS' : 'AI'}</span><span className="ra-message-content">{t.text}</span></div>)}<div ref={transcriptEndRef} /></div>
-              </div>}
-            </div>
+              </div>
+            </div>}
           </div>
         )}
       </main>
-
-      {/* Controls Bar — only during session */}
-      {isConnected && (
-        <div className="ra-controls-bar">
-          <div className="ra-controls-layout">
-            <div className="ra-controls-side left">
-              <button className={`ra-control-btn ra-control-btn-text ${showTranscript ? 'active' : ''}`} onClick={() => setShowTranscript(!showTranscript)} data-testid="transcript-toggle-button">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
-              </button>
-            </div>
-            <div className="ra-controls-center">
-              <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-              </button>
-              <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              </button>
-              <button className={`ra-control-btn ${cameraEnabled ? 'active' : ''}`} onClick={toggleCamera} data-testid="camera-toggle-button">
-                {cameraEnabled ? (
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-                ) : (
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                )}
-              </button>
-            </div>
-            <div className="ra-controls-side right" />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
