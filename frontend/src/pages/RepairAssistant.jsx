@@ -149,10 +149,10 @@ export default function RepairAssistant() {
       };
       ws.onmessage = handleMsg;
       ws.onclose = () => { if (heartbeatRef.current) { clearInterval(heartbeatRef.current); heartbeatRef.current = null; }
-        if (sessionActiveRef.current) { reconnectCountRef.current++; log('WS', `Reconnecting #${reconnectCountRef.current}`); setStatus('Reconnecting...'); setVoiceState('thinking');
+        if (sessionActiveRef.current) { reconnectCountRef.current++; log('WS', `Reconnecting #${reconnectCountRef.current}`);
           reconnectRef.current = setTimeout(() => { if (!sessionActiveRef.current) return;
-            connectWS().then(() => { setVoiceState('listening'); setStatus('Listening...'); setTranscript(p => [...p, { role: 'system', text: `(Reconnected #${reconnectCountRef.current})`, final: true }]); }).catch(() => { setStatus('Reconnect failed'); setIsConnected(false); sessionActiveRef.current = false; });
-          }, 1000);
+            connectWS().then(() => { setVoiceState('listening'); setStatus('Listening...'); log('WS', 'Reconnected seamlessly'); }).catch(() => { setStatus('Reconnect failed'); setIsConnected(false); sessionActiveRef.current = false; });
+          }, 300);
         } else { setIsConnected(false); setVoiceState('idle'); setStatus('Ready'); }
       };
       ws.onerror = () => { clearTimeout(t); reject(new Error('WS error')); };

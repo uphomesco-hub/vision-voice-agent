@@ -124,6 +124,9 @@ async def ws_session(websocket: WebSocket):
     alive = True
     session_id = None
     frame_count = 0
+    last_ping_frame = 0
+    ai_speaking = False
+    last_user_speech = 0
     intentional_end = False  # Track if user clicked End
 
     try:
@@ -241,7 +244,7 @@ async def ws_session(websocket: WebSocket):
 
         # ─── Gemini → Client ───
         async def recv_gemini():
-            nonlocal alive
+            nonlocal alive, ai_speaking, last_user_speech
             user_buf = ""
             asst_buf = ""
             try:
@@ -264,6 +267,7 @@ async def ws_session(websocket: WebSocket):
                         # Audio
                         mt = sc.get("modelTurn")
                         if mt and mt.get("parts"):
+                            ai_speaking = True
                             await websocket.send_json({"type": "assistant.state", "state": "speaking"})
                             for p in mt["parts"]:
                                 idata = p.get("inlineData")
@@ -274,6 +278,7 @@ async def ws_session(websocket: WebSocket):
                         itx = sc.get("inputTranscription")
                         if itx and itx.get("text"):
                             user_buf += itx["text"]
+                            last_user_speech = asyncio.get_event_loop().time()
                             await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
 
                         # Output transcription
@@ -291,10 +296,12 @@ async def ws_session(websocket: WebSocket):
                                 logger.info(f"[{session_id}] Google Search: {queries}")
 
                         if sc.get("interrupted"):
+                            ai_speaking = False
                             await websocket.send_json({"type": "interrupted"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
 
                         if sc.get("turnComplete"):
+                            ai_speaking = False
                             logger.info(f"[{session_id}] Turn complete")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
@@ -360,6 +367,21 @@ async def ws_session(websocket: WebSocket):
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": msg["data"]}]}
                     }))
+
+                    # Lightweight vision ping — every 4 frames (~8s)
+                    # Only when AI is silent and user hasn't spoken in last 4s
+                    now = asyncio.get_event_loop().time()
+                    frames_since_ping = frame_count - last_ping_frame
+                    if (frames_since_ping >= 4
+                        and not ai_speaking
+                        and (now - last_user_speech) > 4):
+                        last_ping_frame = frame_count
+                        await gemini_ws.send(json.dumps({
+                            "clientContent": {
+                                "turns": [{"role": "user", "parts": [{"text": "[OBSERVE]"}]}],
+                                "turnComplete": True
+                            }
+                        }))
 
                     if frame_count % 10 == 0:
                         logger.info(f"[{session_id}] Frames sent: {frame_count}")
