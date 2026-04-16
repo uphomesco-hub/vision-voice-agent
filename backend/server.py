@@ -31,8 +31,8 @@ GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativ
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
-DIFF_THRESHOLD = 28.0  # Raised: only significant scene changes (flip, open, remove)
-DIFF_COOLDOWN_FRAMES = 4  # Min frames between nudges (~8s at 2s/frame)
+DIFF_THRESHOLD = 10.0  # Catch small changes
+DIFF_COOLDOWN_FRAMES = 2
 
 def compute_frame_diff(prev_bytes, curr_bytes):
     """Compare two JPEG blobs as tiny grayscale thumbnails. Returns mean pixel diff 0-255."""
@@ -406,7 +406,7 @@ async def ws_session(websocket: WebSocket):
                                             current = steps_list[step_num]
                                             step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
 
-                            nudge_text = f"[SCENE_CHANGED] Glance at the latest frame.{step_context} Describe ONLY objects clearly visible in this exact frame right now. Do NOT say 'removed' or 'confirmed' unless you can name a specific visual feature of the current frame that proves it (e.g., 'empty battery compartment with contacts exposed'). If you cannot clearly see what changed, stay silent."
+                            nudge_text = f"[OBSERVE] Describe what you see in the current frame right now in one natural sentence.{step_context} Comment on any change, even a small one — tilt, movement, part shift, new object. Name a specific visible feature. Do not invent actions; only describe what's actually in this frame. If truly identical to your last observation, say nothing."
 
                             await gemini_ws.send(json.dumps({
                                 "clientContent": {
