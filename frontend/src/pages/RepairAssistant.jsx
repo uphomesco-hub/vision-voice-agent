@@ -3,8 +3,8 @@ import { Room } from 'livekit-client';
 import axios from 'axios';
 import './RepairAssistant.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8001';
-const API = `${BACKEND_URL}/api`;
+// Use full backend URL for production
+const API = process.env.REACT_APP_BACKEND_URL ? `${process.env.REACT_APP_BACKEND_URL}/api` : '/api';
 
 export default function RepairAssistant() {
   const [personas, setPersonas] = useState([]);
