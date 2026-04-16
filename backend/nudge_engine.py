@@ -20,11 +20,11 @@ DEFAULT_COOLDOWNS = {
     "internals_visible": 30,
     "angle_hint": 90,  # Very slow — don't nag about framing
     "label_text_change": 20,
-    "vision_check": 5,  # Allow frequent observations
+    "vision_check": 10,  # Balanced — avoid spam and context overflow
 }
 
 # Grace period after user speaks before allowing visual nudges (seconds)
-USER_SPEECH_GRACE = 2
+USER_SPEECH_GRACE = 3
 
 
 class NudgeEngine:
