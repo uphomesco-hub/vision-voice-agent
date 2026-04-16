@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import axios from "axios";
-import RepairAssistant from "@/pages/RepairAssistant";
+import RepairAssistantClientSide from "@/pages/RepairAssistantClientSide";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -32,13 +32,13 @@ const Home = () => {
         >
           <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
         </a>
-        <p className="mt-5">Realtime Repair Assistant</p>
+        <p className="mt-5">AI Voice Repair Assistant</p>
         <a 
           className="App-link mt-5" 
           href="/repair"
           style={{ textDecoration: 'underline' }}
         >
-          → Go to Voice Assistant
+          → Start Voice Session
         </a>
       </header>
     </div>
@@ -51,7 +51,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Home />} />
-          <Route path="/repair" element={<RepairAssistant />} />
+          <Route path="/repair" element={<RepairAssistantClientSide />} />
         </Routes>
       </BrowserRouter>
     </div>
