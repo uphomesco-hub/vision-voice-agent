@@ -1,0 +1,13 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+motor==3.7.0
+python-dotenv==1.0.1
+pydantic==2.10.6
+pydantic-settings==2.13.1
+livekit==1.1.5
+livekit-agents==1.5.4
+livekit-plugins-google==1.5.4
+livekit-api==1.1.0
+sqlalchemy==2.0.37
+aiosqlite==0.20.0
+python-multipart==0.0.20
