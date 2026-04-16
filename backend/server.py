@@ -394,7 +394,7 @@ async def ws_session(websocket: WebSocket):
                             frames_since_nudge = 0
                             await gemini_ws.send(json.dumps({
                                 "clientContent": {
-                                    "turns": [{"role": "user", "parts": [{"text": "Describe exactly what you see in the camera right now."}]}],
+                                    "turns": [{"role": "user", "parts": [{"text": "[SCENE_CHANGED] Glance at the latest frame. Comment ONLY if something is actually, clearly different — not if the user's hand is just moving or the frame is blurry. If you cannot CLEARLY see what changed, stay silent."}]}],
                                     "turnComplete": True
                                 }
                             }))
