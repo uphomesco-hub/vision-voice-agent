@@ -197,6 +197,17 @@ async def ws_session(websocket: WebSocket):
                 if state:
                     await websocket.send_json({"type": "session.state", "data": state})
 
+        # Trigger greeting — tell Gemini to introduce itself
+        if not resume_id:
+            greet_msg = {
+                "clientContent": {
+                    "turns": [{"role": "user", "parts": [{"text": "Session just started. Greet the user briefly and ask what device they need help with. Keep it to one natural sentence."}]}],
+                    "turnComplete": True
+                }
+            }
+            await gemini_ws.send(json.dumps(greet_msg))
+            logger.info(f"[{session_id}] Greeting trigger sent")
+
         # ─── Gemini → Client ───
         async def recv_gemini():
             nonlocal alive
