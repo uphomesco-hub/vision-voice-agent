@@ -25,6 +25,7 @@ export default function RepairAssistant() {
   const [warnings, setWarnings] = useState([]);
   const [steps, setSteps] = useState([]);
   const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState('environment');
   const [showTranscript, setShowTranscript] = useState(true);
   const [visionStatus, setVisionStatus] = useState(null);
   const [searchQueries, setSearchQueries] = useState([]);
@@ -172,10 +173,12 @@ export default function RepairAssistant() {
     src.connect(proc); proc.connect(ctx.destination); processorRef.current = proc; setIsMicEnabled(true); log('MIC', 'Active');
   };
   const stopMic = () => { processorRef.current?.disconnect(); processorRef.current = null; audioCtxRef.current?.close(); audioCtxRef.current = null; micStreamRef.current?.getTracks().forEach(t => t.stop()); micStreamRef.current = null; setIsMicEnabled(false); };
-  const startCamera = async () => {
-    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: 640, height: 480 } });
+  const facingRef = useRef('environment');
+  const startCamera = async (facing) => {
+    const mode = facing || facingRef.current;
+    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode, width: 640, height: 480 } });
       camStreamRef.current = stream; if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); } setCameraEnabled(true);
-      frameCountRef.current = 0; frameIntervalRef.current = setInterval(() => captureFrame(), 2000); log('CAM', 'Active');
+      frameCountRef.current = 0; frameIntervalRef.current = setInterval(() => captureFrame(), 2000); log('CAM', `Active (${mode})`);
     } catch (e) { log('CAM', 'Denied:', e.message); }
   };
   const captureFrame = () => { if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -183,6 +186,12 @@ export default function RepairAssistant() {
     try { wsRef.current.send(JSON.stringify({ type: 'video', data: c.toDataURL('image/jpeg', 0.6).split(',')[1] })); frameCountRef.current++; if (frameCountRef.current % 5 === 0) log('CAM', `${frameCountRef.current} frames`); } catch {}
   };
   const stopCamera = () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; camStreamRef.current?.getTracks().forEach(t => t.stop()); camStreamRef.current = null; setCameraEnabled(false); };
+  const flipCamera = async () => {
+    const newFacing = facingRef.current === 'environment' ? 'user' : 'environment';
+    facingRef.current = newFacing; setCameraFacing(newFacing);
+    if (cameraEnabled) { stopCamera(); await startCamera(newFacing); }
+    log('CAM', `Flipped to ${newFacing}`);
+  };
   const cleanup = () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
     if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; };
 
@@ -330,6 +339,9 @@ export default function RepairAssistant() {
                     ) : (
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                     )}
+                  </button>
+                  <button className="ra-control-btn ra-control-btn-flip" onClick={flipCamera} disabled={!cameraEnabled} data-testid="flip-camera-button">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/><path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/><polyline points="16 3 19 6 16 9"/><polyline points="8 15 5 18 8 21"/></svg>
                   </button>
                 </div>
               </div>
