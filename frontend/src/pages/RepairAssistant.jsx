@@ -130,7 +130,8 @@ export default function RepairAssistant() {
         }
       } else if (msg.type === 'error') { log('ERROR', msg.message); if (msg.message.includes('disconnected')) setStatus('Reconnecting...'); else setStatus('Error: ' + msg.message);
       } else if (msg.type === 'vision.status') { log('VISION', msg.status); setVisionStatus(msg.status === 'analyzing' ? 'Analyzing...' : null); if (msg.status === 'analyzing') setTimeout(() => setVisionStatus(null), 3000);
-      } else if (msg.type === 'step.update') { log('STEP', `→ step ${msg.step}`); }
+      } else if (msg.type === 'step.update') { log('STEP', `→ step ${msg.step}`);
+      } else if (msg.type === 'vision.perception') { log('PERCEPTION', `${msg.status} | conf=${msg.confidence ?? '-'} | diff=${msg.diff ?? '-'} | state="${msg.device_state || ''}" | changes=${JSON.stringify(msg.changes || [])}`); }
     } catch (e) { log('ERROR', 'Parse:', e); }
   }, [playAudioChunk]);
 
