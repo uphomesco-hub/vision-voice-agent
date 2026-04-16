@@ -87,6 +87,10 @@ async def search_manuals(
 
     scored.sort(key=lambda x: -x[0])
 
+    # Minimum score threshold — don't return garbage matches
+    MIN_SCORE = 20
+    scored = [(s, m) for s, m in scored if s >= MIN_SCORE]
+
     results = []
     for score, m in scored[:5]:
         jd = m.json_data or {}
