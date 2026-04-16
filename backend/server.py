@@ -179,7 +179,20 @@ async def ws_session(websocket: WebSocket):
                 if sess and sess.active_manual_id:
                     manual = await get_manual_by_id(db, sess.active_manual_id)
                     if manual:
-                        active_manual_context = f"\n\nACTIVE MANUAL: {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
+                        active_manual_context = f"\n\nACTIVE MANUAL (already loaded — do NOT call lookup_manual again): {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
+
+                # Load previous tool runs so Gemini doesn't repeat them
+                tool_runs = await SessionStore.get_tool_runs(db, session_id, limit=10)
+                if tool_runs:
+                    history_context += "\n\nPREVIOUS TOOL CALLS (already executed — do NOT repeat):\n"
+                    for tr in tool_runs:
+                        if tr.tool_name == "lookup_manual":
+                            out = tr.output_data or {}
+                            if out.get("selected_manual_id"):
+                                history_context += f"- lookup_manual: Found {out.get('manual_summary','')}\n"
+                            else:
+                                history_context += f"- lookup_manual: No manual found for {tr.input_data}. Used general knowledge instead.\n"
+                    history_context += "Do NOT call these tools again unless the user mentions a DIFFERENT device.\n"
 
         full_prompt = system_prompt + history_context + active_manual_context
 
