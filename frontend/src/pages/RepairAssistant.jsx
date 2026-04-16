@@ -103,9 +103,13 @@ export default function RepairAssistant() {
       if (msg.type === 'heartbeat') return;
 
       if (msg.type === 'session.ready') {
-        sessionIdRef.current = msg.session_id;
-        setSessionId(msg.session_id);
-        log('SESSION', `Session ready: ${msg.session_id}`);
+        // Only set session ID on first connect, keep it on reconnects
+        if (!sessionIdRef.current) {
+          sessionIdRef.current = msg.session_id;
+          setSessionId(msg.session_id);
+        }
+        log('SESSION', `=== SESSION ID: ${sessionIdRef.current} === (share this ID for debugging)`);
+        console.log(`%c SESSION ID: ${sessionIdRef.current} `, 'background: #ffffff; color: #111111; font-size: 14px; font-weight: bold; padding: 4px 8px;');
       } else if (msg.type === 'session.state') {
         log('SESSION', 'Received session state for resume:', JSON.stringify(msg.data).slice(0, 200));
         // Restore UI state from resumed session
@@ -159,10 +163,14 @@ export default function RepairAssistant() {
             setToolActivity({ tool: msg.tool, status: 'done', detail: `Searched: ${(msg.queries || []).join(', ')}` });
             log('SEARCH', 'Google Search queries:', msg.queries);
           } else {
-            setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary || 'Complete' });
             if (msg.manual_id) {
+              setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary });
               setActiveManual({ id: msg.manual_id, summary: msg.result_summary });
-              log('MANUAL', `Active manual: ${msg.result_summary}`);
+              log('MANUAL', `Manual found: ${msg.result_summary}`);
+            } else {
+              setToolActivity({ tool: msg.tool, status: 'done', detail: 'No manual in database — using AI knowledge' });
+              setActiveManual(null);
+              log('MANUAL', 'No manual found in DB — AI will use general knowledge + web search');
             }
             if (msg.warnings?.length) { setWarnings(msg.warnings); log('WARN', `${msg.warnings.length} warnings loaded`); }
             if (msg.steps?.length) { setSteps(msg.steps); log('STEPS', `${msg.steps.length} troubleshooting steps loaded`); }
@@ -204,7 +212,7 @@ export default function RepairAssistant() {
           voice_id: cfg.voice_id,
         };
         // If we have a session ID from a previous connection, send it for history resume
-        if (sessionIdRef.current && reconnectCountRef.current > 0) {
+        if (sessionIdRef.current) {
           configMsg.resume_session_id = sessionIdRef.current;
           log('WS', `Resuming session ${sessionIdRef.current} (reconnect #${reconnectCountRef.current})`);
         }

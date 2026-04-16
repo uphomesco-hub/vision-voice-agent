@@ -93,6 +93,24 @@ async def get_logs(sid: str, db: AsyncSession = Depends(get_db)):
 async def end_session_api(sid: str, db: AsyncSession = Depends(get_db)):
     return {"status": "ended" if await SessionStore.end_session(db, sid) else "not_found"}
 
+@api.get("/sessions/{sid}/full-transcript")
+async def get_full_transcript(sid: str, db: AsyncSession = Depends(get_db)):
+    """Get the complete session transcript + tool runs + observations for debugging."""
+    state = await SessionStore.get_session_state(db, sid)
+    if not state:
+        return {"error": "Session not found"}
+    return {
+        "session_id": state["session_id"],
+        "status": state["status"],
+        "persona_id": state["persona_id"],
+        "voice_id": state["voice_id"],
+        "active_manual_id": state["active_manual_id"],
+        "current_step": state["current_step"],
+        "transcript": [{"role": t["role"], "text": t["content"], "source": t["source_type"], "at": t["created_at"]} for t in state["turns"]],
+        "tool_runs": [{"tool": tr["tool_name"], "status": tr["status"], "input": tr["input"], "output": tr["output"], "at": tr["created_at"]} for tr in state["tool_runs"]],
+        "observations": state["observations"],
+    }
+
 app.include_router(api)
 
 # ─── WEBSOCKET ───────────────────────────
@@ -108,7 +126,8 @@ async def ws_session(websocket: WebSocket):
     nudge = NudgeEngine()
     frame_count = 0
     last_nudge_frame = 0
-    is_speaking = False  # Track if Gemini is currently speaking
+    is_speaking = False
+    intentional_end = False  # Track if user clicked End
 
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -385,7 +404,8 @@ async def ws_session(websocket: WebSocket):
                     await websocket.send_json({"type": "heartbeat"})
 
                 elif t == "end":
-                    logger.info(f"[{session_id}] Client ended")
+                    intentional_end = True
+                    logger.info(f"[{session_id}] Client ended session intentionally")
                     break
 
             except websockets.exceptions.ConnectionClosed:
@@ -421,7 +441,7 @@ async def ws_session(websocket: WebSocket):
                 await gemini_ws.close()
             except:
                 pass
-        # Save snapshot on disconnect (not on intentional end)
+        # Save snapshot on disconnect
         if session_id:
             try:
                 async with AsyncSessionLocal() as db:
@@ -432,6 +452,12 @@ async def ws_session(websocket: WebSocket):
                         db.add(snap)
                         await db.commit()
                         logger.info(f"[{session_id}] Snapshot saved")
+                    # Only mark session as ended if user intentionally clicked End
+                    if intentional_end:
+                        await SessionStore.end_session(db, session_id)
+                        logger.info(f"[{session_id}] Session ended (intentional)")
+                    else:
+                        logger.info(f"[{session_id}] Session kept active for reconnect")
             except:
                 pass
         try:
@@ -457,17 +483,31 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
                 result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
                 if result.get("selected_manual_id"):
                     await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
+                else:
+                    # No manual found — add clear instruction for Gemini
+                    result["no_manual_instruction"] = "IMPORTANT: No manual was found in our internal database for this device. You MUST tell the user: 'I don't have an internal repair manual for this device in my database. Let me use my general knowledge and search the web to help you.' Then proceed using your own knowledge and Google Search. Do NOT pretend you have a manual."
         else:
             result = {"error": f"Unknown tool: {fn}"}
 
         responses.append({"id": fid, "name": fn, "response": result})
-        await client_ws.send_json({
-            "type": "tool.status", "tool": fn, "status": "done",
-            "result_summary": result.get("manual_summary", ""),
-            "manual_id": result.get("selected_manual_id"),
-            "warnings": result.get("warnings", []),
-            "steps": result.get("troubleshooting_steps", [])[:5],
-        })
+
+        # Send different UI status based on whether manual was found
+        if result.get("selected_manual_id"):
+            await client_ws.send_json({
+                "type": "tool.status", "tool": fn, "status": "done",
+                "result_summary": result.get("manual_summary", ""),
+                "manual_id": result.get("selected_manual_id"),
+                "warnings": result.get("warnings", []),
+                "steps": result.get("troubleshooting_steps", [])[:5],
+            })
+        else:
+            await client_ws.send_json({
+                "type": "tool.status", "tool": fn, "status": "done",
+                "result_summary": "No manual found — using general knowledge",
+                "manual_id": None,
+                "warnings": [],
+                "steps": [],
+            })
 
     await gemini_ws.send(json.dumps({
         "toolResponse": {"functionResponses": [{"id": r["id"], "name": r["name"], "response": r["response"]} for r in responses]}
