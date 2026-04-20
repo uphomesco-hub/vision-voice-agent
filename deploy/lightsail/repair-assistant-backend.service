@@ -1,0 +1,17 @@
+[Unit]
+Description=Repair Assistant FastAPI backend
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/repair-assistant/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=VENV_DIR=/opt/repair-assistant/backend/.venv
+ExecStart=/opt/repair-assistant/backend/start_server.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
