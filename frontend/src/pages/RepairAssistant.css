@@ -238,6 +238,8 @@
   .ra-session-layout { flex-direction: column; }
   .ra-info-section { width: 100%; flex: none; height: 40vh; border-left: none; border-top: 1px solid var(--border); }
   .ra-camera-section { flex: none; height: 60vh; }
+  .ra-session-layout.no-transcript .ra-camera-section { flex: 1; height: 100%; }
+  .ra-session-layout.no-transcript .ra-info-section { display: none; }
   .ra-btn-init { border-radius: 8px; }
   .ra-control-label { display: none; }
   .ra-control-btn-text { width: 44px; padding: 0; border-radius: 50%; }
