@@ -53,18 +53,6 @@ export default function RepairAssistant() {
   const touchStartRef = useRef(null);
   const hasBackendConfig = Boolean(BACKEND_URL);
 
-  useEffect(() => {
-    log('INIT', 'Loading...');
-    if (!hasBackendConfig) {
-      setStatus('Backend URL missing');
-      return;
-    }
-    loadData();
-    return () => {
-      sessionActiveRef.current = false;
-      cleanup();
-    };
-  }, [cleanup, hasBackendConfig, loadData]);
   useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcript]);
 
   const loadData = useCallback(async () => {
@@ -208,6 +196,19 @@ export default function RepairAssistant() {
   };
   const cleanup = useCallback(() => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
     if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; }, [stopCamera, stopMic]);
+
+  useEffect(() => {
+    log('INIT', 'Loading...');
+    if (!hasBackendConfig) {
+      setStatus('Backend URL missing');
+      return;
+    }
+    loadData();
+    return () => {
+      sessionActiveRef.current = false;
+      cleanup();
+    };
+  }, [cleanup, hasBackendConfig, loadData]);
 
   const toggleCamera = async () => {
     if (cameraEnabled) { stopCamera(); log('CAM', 'Toggled OFF'); }
