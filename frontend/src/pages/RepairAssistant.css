@@ -139,6 +139,77 @@
 .ra-btn-init:hover { opacity: 0.85; }
 .ra-btn-init:active { opacity: 0.7; transform: scale(0.998); }
 
+/* ─── Compact Desktop Heights ─── */
+@media (max-height: 860px) and (min-width: 769px) {
+  .repair-assistant { min-height: 100vh; }
+  .ra-header { height: 44px; padding: 0 20px; }
+  .ra-live-text { font-size: 11px; }
+  .ra-app-title { font-size: 13px; }
+  .ra-setup-page { padding: 22px 28px 0; }
+  .ra-personality-section { margin-bottom: 18px; }
+  .ra-section-heading { font-size: 19px; margin-bottom: 12px; }
+  .ra-persona-grid { gap: 10px; }
+  .ra-persona-card { padding: 14px 12px; border-radius: 10px; }
+  .ra-persona-avatar { width: 46px; height: 46px; margin-bottom: 10px; }
+  .ra-persona-name { font-size: 13px; }
+  .ra-persona-trait { font-size: 9px; margin-bottom: 5px; }
+  .ra-persona-desc { font-size: 11px; line-height: 1.3; }
+  .ra-voice-section { margin-bottom: 12px; }
+  .ra-voice-list { gap: 5px; }
+  .ra-voice-row { padding: 8px 12px; }
+  .ra-voice-play { width: 28px; height: 28px; }
+  .ra-voice-name { font-size: 12px; }
+  .ra-voice-meta { font-size: 10px; }
+  .ra-init-section { padding: 12px 0 18px; }
+  .ra-btn-init { padding: 12px; font-size: 13px; }
+}
+
+@media (max-height: 740px) and (min-width: 769px) {
+  .ra-header { height: 40px; padding: 0 16px; }
+  .ra-live-indicator { gap: 6px; }
+  .ra-live-text { font-size: 10px; }
+  .ra-app-title { font-size: 12px; }
+  .ra-session-id { font-size: 9px; }
+  .ra-setup-page { padding: 14px 20px 0; }
+  .ra-personality-section { margin-bottom: 10px; }
+  .ra-section-heading { font-size: 16px; margin-bottom: 10px; }
+  .ra-persona-grid { gap: 8px; }
+  .ra-persona-card { padding: 10px 10px; border-radius: 9px; }
+  .ra-persona-avatar { width: 38px; height: 38px; margin-bottom: 8px; }
+  .ra-persona-name { font-size: 12px; margin-bottom: 1px; }
+  .ra-persona-trait { font-size: 8px; margin-bottom: 4px; }
+  .ra-persona-desc {
+    font-size: 10px;
+    line-height: 1.22;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .ra-persona-check {
+    top: 6px;
+    right: 6px;
+    width: 16px;
+    height: 16px;
+  }
+  .ra-voice-section { margin-bottom: 8px; }
+  .ra-voice-list { gap: 4px; }
+  .ra-voice-row { gap: 10px; padding: 7px 10px; border-radius: 7px; }
+  .ra-voice-play { width: 24px; height: 24px; }
+  .ra-voice-name { font-size: 11px; }
+  .ra-voice-meta { font-size: 9px; }
+  .ra-voice-wave { height: 16px; }
+  .ra-wave-line:nth-child(1) { height: 4px; }
+  .ra-wave-line:nth-child(2) { height: 10px; }
+  .ra-wave-line:nth-child(3) { height: 7px; }
+  .ra-wave-line:nth-child(4) { height: 12px; }
+  .ra-wave-line:nth-child(5) { height: 5px; }
+  .ra-voice-radio { width: 15px; height: 15px; }
+  .ra-radio-dot { width: 6px; height: 6px; }
+  .ra-init-section { padding: 8px 0 14px; }
+  .ra-btn-init { padding: 10px; font-size: 12px; border-radius: 7px; }
+}
+
 /* ═══ SESSION LAYOUT ═══ */
 .ra-session-layout { display: flex; width: 100%; height: 100%; }
 .ra-camera-section { flex: 1; position: relative; background: #000; display: flex; flex-direction: column; min-width: 0; }
