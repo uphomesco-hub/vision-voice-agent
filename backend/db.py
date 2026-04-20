@@ -2,9 +2,12 @@ from sqlalchemy import create_engine, Column, String, DateTime, Text, Integer, F
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
+from pathlib import Path
+import os
 import uuid
 
-DATABASE_URL = "sqlite+aiosqlite:///./sessions.db"
+DEFAULT_DB_PATH = Path(__file__).resolve().parent / "sessions.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_PATH}")
 
 Base = declarative_base()
 
