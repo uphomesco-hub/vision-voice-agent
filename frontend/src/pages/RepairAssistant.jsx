@@ -51,15 +51,22 @@ export default function RepairAssistant() {
   const reconnectCountRef = useRef(0);
   const touchStartRef = useRef(null);
 
-  useEffect(() => { log('INIT', 'Loading...'); loadData(); return () => { sessionActiveRef.current = false; cleanup(); }; }, []);
+  useEffect(() => {
+    log('INIT', 'Loading...');
+    loadData();
+    return () => {
+      sessionActiveRef.current = false;
+      cleanup();
+    };
+  }, [cleanup, loadData]);
   useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcript]);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [p, v] = await Promise.all([fetch(`${API}/personas`).then(r => r.json()), fetch(`${API}/voices`).then(r => r.json())]);
       setPersonas(p); setVoices(v); log('DATA', `${p.length} personas, ${v.length} voices`);
     } catch (e) { setStatus('Error loading'); }
-  };
+  }, []);
 
   // ─── Audio Playback ──────────────
   const playAudioChunk = useCallback((b64) => {
@@ -173,7 +180,7 @@ export default function RepairAssistant() {
     };
     src.connect(proc); proc.connect(ctx.destination); processorRef.current = proc; setIsMicEnabled(true); log('MIC', 'Active');
   };
-  const stopMic = () => { processorRef.current?.disconnect(); processorRef.current = null; audioCtxRef.current?.close(); audioCtxRef.current = null; micStreamRef.current?.getTracks().forEach(t => t.stop()); micStreamRef.current = null; setIsMicEnabled(false); };
+  const stopMic = useCallback(() => { processorRef.current?.disconnect(); processorRef.current = null; audioCtxRef.current?.close(); audioCtxRef.current = null; micStreamRef.current?.getTracks().forEach(t => t.stop()); micStreamRef.current = null; setIsMicEnabled(false); }, []);
   const facingRef = useRef('environment');
   const startCamera = async (facing) => {
     const mode = facing || facingRef.current;
@@ -186,15 +193,15 @@ export default function RepairAssistant() {
     const c = document.createElement('canvas'); c.width = 640; c.height = 480; c.getContext('2d').drawImage(videoRef.current, 0, 0, 640, 480);
     try { wsRef.current.send(JSON.stringify({ type: 'video', data: c.toDataURL('image/jpeg', 0.6).split(',')[1] })); frameCountRef.current++; if (frameCountRef.current % 5 === 0) log('CAM', `${frameCountRef.current} frames`); } catch {}
   };
-  const stopCamera = () => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; camStreamRef.current?.getTracks().forEach(t => t.stop()); camStreamRef.current = null; setCameraEnabled(false); };
+  const stopCamera = useCallback(() => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; camStreamRef.current?.getTracks().forEach(t => t.stop()); camStreamRef.current = null; setCameraEnabled(false); }, []);
   const flipCamera = async () => {
     const newFacing = facingRef.current === 'environment' ? 'user' : 'environment';
     facingRef.current = newFacing; setCameraFacing(newFacing);
     if (cameraEnabled) { stopCamera(); await startCamera(newFacing); }
     log('CAM', `Flipped to ${newFacing}`);
   };
-  const cleanup = () => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
-    if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; };
+  const cleanup = useCallback(() => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
+    if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; }, [stopCamera, stopMic]);
 
   const toggleCamera = async () => {
     if (cameraEnabled) { stopCamera(); log('CAM', 'Toggled OFF'); }
