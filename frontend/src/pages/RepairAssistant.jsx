@@ -308,7 +308,7 @@ export default function RepairAssistant() {
           </div>
         ) : (
           /* ═══ ACTIVE SESSION ═══ */
-          <div className="ra-session-layout">
+          <div className={`ra-session-layout ${!showTranscript ? 'no-transcript' : ''}`}>
             <div className="ra-camera-section">
               <div className="ra-camera-container" data-testid="camera-container">
                 <video ref={videoRef} className={`ra-camera-feed ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
