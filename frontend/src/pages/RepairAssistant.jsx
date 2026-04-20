@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import './RepairAssistant.css';
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
-const WS_BASE = process.env.REACT_APP_BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
+const API = BACKEND_URL ? `${BACKEND_URL}/api` : '';
+const WS_BASE = BACKEND_URL ? BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') : '';
 
 function log(cat, ...args) {
   const ts = new Date().toISOString().slice(11, 23);
@@ -50,15 +51,20 @@ export default function RepairAssistant() {
   const frameCountRef = useRef(0);
   const reconnectCountRef = useRef(0);
   const touchStartRef = useRef(null);
+  const hasBackendConfig = Boolean(BACKEND_URL);
 
   useEffect(() => {
     log('INIT', 'Loading...');
+    if (!hasBackendConfig) {
+      setStatus('Backend URL missing');
+      return;
+    }
     loadData();
     return () => {
       sessionActiveRef.current = false;
       cleanup();
     };
-  }, [cleanup, loadData]);
+  }, [cleanup, hasBackendConfig, loadData]);
   useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcript]);
 
   const loadData = useCallback(async () => {
@@ -209,6 +215,10 @@ export default function RepairAssistant() {
   };
 
   const startSession = async () => {
+    if (!hasBackendConfig) {
+      setStatus('Backend URL missing');
+      return;
+    }
     try { log('SESSION', 'Starting...'); setStatus('Connecting...'); configRef.current = { persona_id: selectedPersona, voice_id: selectedVoice }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
       await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 1500)); await startMic(); await startCamera(); setVoiceState('listening'); setStatus('Listening...'); setTranscript([{ role: 'system', text: 'Session started — speak and show your device!', final: true }]); log('SESSION', 'Active');
     } catch (e) { sessionActiveRef.current = false; setStatus('Error: ' + e.message); stopMic(); stopCamera(); wsRef.current?.close(); wsRef.current = null; }
@@ -233,6 +243,20 @@ export default function RepairAssistant() {
 
   // ─── RENDER ──────────────────────
   const selectedPersonaData = personas.find(p => p.id === selectedPersona);
+
+  if (!hasBackendConfig) {
+    return (
+      <div className="repair-assistant" data-testid="repair-assistant">
+        <main className="ra-main-content" style={{ display: 'grid', placeItems: 'center', minHeight: '100vh', padding: '24px' }}>
+          <section style={{ maxWidth: '560px', padding: '24px', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '20px', background: 'rgba(10,10,10,0.9)', color: '#f5f5f5' }}>
+            <h1 style={{ margin: '0 0 12px', fontSize: '1.5rem' }}>Frontend configuration missing</h1>
+            <p style={{ margin: '0 0 8px' }}>Set <code>REACT_APP_BACKEND_URL</code> in Netlify and redeploy.</p>
+            <p style={{ margin: 0 }}>Expected value: <code>https://16-16-11-190.sslip.io</code></p>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="repair-assistant" data-testid="repair-assistant">
