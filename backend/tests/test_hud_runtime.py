@@ -1,6 +1,9 @@
 from pathlib import Path
+import base64
+import io
 import sys
 
+from PIL import Image, ImageDraw
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -19,6 +22,16 @@ from hud_runtime import (
     sync_manual_bundle,
 )
 from manual_repo import get_manual_by_id, seed_manuals
+
+
+def _image_b64(square_xy):
+    image = Image.new("RGB", (160, 120), "black")
+    draw = ImageDraw.Draw(image)
+    x, y = square_xy
+    draw.rectangle((x, y, x + 24, y + 18), fill="white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=95)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 @pytest.mark.asyncio
@@ -245,7 +258,59 @@ async def test_tracked_marker_updates_geometry_and_history(monkeypatch):
     assert 0.1 < marker["geometry"]["x"] < 0.5
     assert marker["track_count"] == 1
     assert marker["confidence_level"] == "high"
-    assert any(item["event"] == "tracked" for item in runtime["marker_history"])
+    assert any(item["event"] == "gemini_revalidated" for item in runtime["marker_history"])
+    clear_runtime(session_id)
+
+
+@pytest.mark.asyncio
+async def test_local_template_tracker_moves_marker_without_gemini(monkeypatch):
+    session_id = "hud-local-tracker-session"
+    clear_runtime(session_id)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    set_latest_frame(session_id, _image_b64((24, 32)))
+
+    async def fake_ground_feature(_session_id, target, _action_type, allow_approximate=True):
+        return {
+            "status": "placed",
+            "confidence": 0.93,
+            "label": target.get("label", "white square"),
+            "geometry": {"type": "box", "x": 24 / 160, "y": 32 / 120, "width": 24 / 160, "height": 18 / 120},
+        }
+
+    async def fake_verify(_session_id, _target, candidate, _action_type):
+        return {
+            "decision": "accept",
+            "confidence": 0.93,
+            "reason": "Candidate matches target.",
+            "corrected_label": candidate.get("label"),
+            "retry_hint": "",
+        }
+
+    monkeypatch.setattr("hud_runtime.ground_feature", fake_ground_feature)
+    monkeypatch.setattr("hud_runtime.verify_grounding_candidate", fake_verify)
+
+    async with AsyncSessionLocal() as db:
+        result = await run_highlight_tool(db, session_id, {
+            "operation": "create",
+            "feature_id": "runtime:auto",
+            "target_hint": "white square",
+            "action_type": "inspect",
+            "reason": "user_request",
+        })
+    marker_id = result["marker_id"]
+    runtime = get_runtime_state(session_id)
+    runtime["markers"][marker_id]["last_tracked_at"] = "2020-01-01T00:00:00+00:00"
+    set_latest_frame(session_id, _image_b64((72, 46)))
+
+    tracking = await refresh_tracked_markers(session_id)
+    marker = build_hud_snapshot(session_id, current_step_index=0)["markers"][0]
+
+    assert tracking["local_updated"] == 1
+    assert tracking["gemini_updated"] == 0
+    assert marker["tracking_source"] == "local_template"
+    assert marker["geometry"]["x"] > 0.25
+    assert marker["local_track_count"] == 1
+    assert any(item["event"] == "local_tracked" for item in runtime["marker_history"])
     clear_runtime(session_id)
 
 

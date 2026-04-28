@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import numpy as np
 from PIL import Image
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,10 @@ GROUNDING_MODEL = "gemini-2.5-flash"
 GROUNDING_MAX_ATTEMPTS = 3
 TRACKING_MIN_INTERVAL_SECONDS = 1.5
 TRACKING_EXTENSION_MS = 4500
+LOCAL_TRACKER_MIN_CONFIDENCE = 0.58
+LOCAL_TRACKER_SEARCH_PAD = 0.18
+LOCAL_TRACKER_TEMPLATE_MAX = 52
+GEMINI_REVALIDATION_SECONDS = 7.0
 
 _runtime: Dict[str, Dict[str, Any]] = {}
 PERSON_LABEL_TOKENS = {
@@ -533,13 +538,18 @@ def build_hud_snapshot(session_id: str, current_step_index: int = 0) -> Dict[str
     current_step_target = get_current_step_target(session_id, current_step_index)
     return {
         "type": "hud.state",
-        "markers": list(runtime["markers"].values()),
+        "markers": [_public_marker(marker) for marker in runtime["markers"].values()],
         "feature_catalog": list(runtime["feature_catalog"].values()),
         "current_step_target": current_step_target,
         "pending_confirmation": runtime["pending_confirmation"],
         "marker_history": runtime["marker_history"][-5:],
         "hud_prompt": runtime["hud_prompt"],
     }
+
+
+def _public_marker(marker: Dict[str, Any]) -> Dict[str, Any]:
+    private_fields = {"tracker_template_b64", "source_target"}
+    return {key: value for key, value in marker.items() if key not in private_fields}
 
 
 def _combined_observation_text(observation: Dict[str, Any]) -> str:
@@ -674,14 +684,21 @@ def _crop_geometry_image(frame_b64: str, geometry: Dict[str, Any]) -> Optional[s
     image = _decode_frame_image(frame_b64)
     if image is None:
         return None
+    crop = _crop_geometry_pil(image, geometry, padded=True)
+    if crop is None:
+        return None
+    return _encode_image_b64(crop)
+
+
+def _crop_geometry_pil(image: Image.Image, geometry: Dict[str, Any], padded: bool = False) -> Optional[Image.Image]:
     width, height = image.size
     if geometry.get("type") == "box":
         x = max(0.0, min(1.0, float(geometry.get("x", 0.0) or 0.0)))
         y = max(0.0, min(1.0, float(geometry.get("y", 0.0) or 0.0)))
         w = max(0.01, min(1.0, float(geometry.get("width", 0.2) or 0.2)))
         h = max(0.01, min(1.0, float(geometry.get("height", 0.2) or 0.2)))
-        pad_x = min(0.12, w * 0.35)
-        pad_y = min(0.12, h * 0.35)
+        pad_x = min(0.12, w * 0.35) if padded else 0.0
+        pad_y = min(0.12, h * 0.35) if padded else 0.0
         left = max(0, int((x - pad_x) * width))
         top = max(0, int((y - pad_y) * height))
         right = min(width, int((x + w + pad_x) * width))
@@ -696,7 +713,7 @@ def _crop_geometry_image(frame_b64: str, geometry: Dict[str, Any]) -> Optional[s
         bottom = min(height, int((py + span) * height))
     if right <= left or bottom <= top:
         return None
-    return _encode_image_b64(image.crop((left, top, right, bottom)))
+    return image.crop((left, top, right, bottom))
 
 
 async def ground_feature(session_id: str, target: Dict[str, Any], action_type: str, allow_approximate: bool = True) -> Dict[str, Any]:
@@ -1019,6 +1036,147 @@ def _target_for_marker(runtime: Dict[str, Any], marker: Dict[str, Any]) -> Optio
     return None
 
 
+def _template_for_marker(runtime: Dict[str, Any], marker: Dict[str, Any]) -> Optional[Image.Image]:
+    template_b64 = marker.get("tracker_template_b64")
+    if template_b64:
+        template = _decode_frame_image(template_b64)
+        if template is not None:
+            return template.convert("L")
+    frame_b64 = runtime.get("latest_frame_b64")
+    if not frame_b64:
+        return None
+    image = _decode_frame_image(frame_b64)
+    if image is None:
+        return None
+    crop = _crop_geometry_pil(image, marker.get("geometry") or {}, padded=False)
+    if crop is None:
+        return None
+    encoded = _encode_image_b64(crop)
+    if encoded:
+        marker["tracker_template_b64"] = encoded
+    return crop.convert("L")
+
+
+def _prepare_template(template: Image.Image) -> Optional[np.ndarray]:
+    width, height = template.size
+    if width < 6 or height < 6:
+        return None
+    scale = min(1.0, LOCAL_TRACKER_TEMPLATE_MAX / max(width, height))
+    target_size = (max(6, int(width * scale)), max(6, int(height * scale)))
+    return np.asarray(template.resize(target_size).convert("L"), dtype=np.float32) / 255.0
+
+
+def _candidate_similarity(template_arr: np.ndarray, candidate: Image.Image) -> float:
+    candidate_arr = np.asarray(candidate.resize((template_arr.shape[1], template_arr.shape[0])).convert("L"), dtype=np.float32) / 255.0
+    mse = float(np.mean((template_arr - candidate_arr) ** 2))
+    return max(0.0, min(1.0, 1.0 - (mse * 2.8)))
+
+
+def _local_track_marker(runtime: Dict[str, Any], marker: Dict[str, Any]) -> Dict[str, Any]:
+    frame_b64 = runtime.get("latest_frame_b64")
+    if not frame_b64:
+        return {"status": "skipped", "reason": "no_frame", "confidence": 0.0}
+    frame = _decode_frame_image(frame_b64)
+    if frame is None:
+        return {"status": "skipped", "reason": "bad_frame", "confidence": 0.0}
+    template = _template_for_marker(runtime, marker)
+    if template is None:
+        return {"status": "skipped", "reason": "no_template", "confidence": 0.0}
+    template_arr = _prepare_template(template)
+    if template_arr is None:
+        return {"status": "skipped", "reason": "small_template", "confidence": 0.0}
+
+    geometry = marker.get("geometry") or {}
+    if geometry.get("type") != "box":
+        return {"status": "skipped", "reason": "unsupported_geometry", "confidence": 0.0}
+
+    frame_width, frame_height = frame.size
+    x = _normalize_value(geometry.get("x")) or 0.0
+    y = _normalize_value(geometry.get("y")) or 0.0
+    w = max(0.02, _normalize_value(geometry.get("width")) or 0.16)
+    h = max(0.02, _normalize_value(geometry.get("height")) or 0.16)
+
+    box_width = max(8, int(w * frame_width))
+    box_height = max(8, int(h * frame_height))
+    center_x = int((x + w / 2.0) * frame_width)
+    center_y = int((y + h / 2.0) * frame_height)
+    pad_x = max(int(LOCAL_TRACKER_SEARCH_PAD * frame_width), box_width)
+    pad_y = max(int(LOCAL_TRACKER_SEARCH_PAD * frame_height), box_height)
+
+    left = max(0, center_x - pad_x)
+    right = min(frame_width - box_width, center_x + pad_x)
+    top = max(0, center_y - pad_y)
+    bottom = min(frame_height - box_height, center_y + pad_y)
+    if right < left or bottom < top:
+        return {"status": "skipped", "reason": "bad_search_window", "confidence": 0.0}
+
+    gray = frame.convert("L")
+
+    def scan_window(left_px: int, top_px: int, right_px: int, bottom_px: int, stride_px: int):
+        best_score = -1.0
+        best_xy = None
+        for py in range(top_px, bottom_px + 1, stride_px):
+            for px in range(left_px, right_px + 1, stride_px):
+                candidate = gray.crop((px, py, px + box_width, py + box_height))
+                score = _candidate_similarity(template_arr, candidate)
+                if score > best_score:
+                    best_score = score
+                    best_xy = (px, py)
+        return best_score, best_xy
+
+    stride = max(4, min(box_width, box_height) // 6)
+    best_score, best_xy = scan_window(left, top, right, bottom, stride)
+
+    if best_score < LOCAL_TRACKER_MIN_CONFIDENCE:
+        coarse_stride = max(stride * 2, min(box_width, box_height) // 2, 8)
+        full_right = max(0, frame_width - box_width)
+        full_bottom = max(0, frame_height - box_height)
+        full_score, full_xy = scan_window(0, 0, full_right, full_bottom, coarse_stride)
+        if full_xy is not None:
+            refine_pad_x = max(box_width, coarse_stride * 2)
+            refine_pad_y = max(box_height, coarse_stride * 2)
+            refine_left = max(0, full_xy[0] - refine_pad_x)
+            refine_top = max(0, full_xy[1] - refine_pad_y)
+            refine_right = min(full_right, full_xy[0] + refine_pad_x)
+            refine_bottom = min(full_bottom, full_xy[1] + refine_pad_y)
+            full_score, full_xy = scan_window(refine_left, refine_top, refine_right, refine_bottom, stride)
+        if full_score > best_score:
+            best_score = full_score
+            best_xy = full_xy
+
+    if best_xy is None:
+        return {"status": "lost", "reason": "no_candidate", "confidence": 0.0}
+
+    px, py = best_xy
+    geometry = {
+        "type": "box",
+        "x": px / frame_width,
+        "y": py / frame_height,
+        "width": box_width / frame_width,
+        "height": box_height / frame_height,
+    }
+    return {
+        "status": "tracked" if best_score >= LOCAL_TRACKER_MIN_CONFIDENCE else "low_confidence",
+        "confidence": best_score,
+        "geometry": _normalize_geometry(geometry),
+    }
+
+
+def _refresh_marker_template(runtime: Dict[str, Any], marker: Dict[str, Any]):
+    frame_b64 = runtime.get("latest_frame_b64")
+    if not frame_b64:
+        return
+    image = _decode_frame_image(frame_b64)
+    if image is None:
+        return
+    crop = _crop_geometry_pil(image, marker.get("geometry") or {}, padded=False)
+    if crop is None:
+        return
+    encoded = _encode_image_b64(crop)
+    if encoded:
+        marker["tracker_template_b64"] = encoded
+
+
 async def run_highlight_tool(db: AsyncSession, session_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
     tool_run = SessionToolRun(
         id=str(uuid.uuid4()),
@@ -1052,11 +1210,11 @@ async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
         return {"updated": 0, "skipped": "busy"}
     if not runtime.get("latest_frame_b64"):
         return {"updated": 0, "skipped": "no_frame"}
-    if not os.environ.get("GOOGLE_API_KEY", ""):
-        return {"updated": 0, "skipped": "no_api_key"}
-
     runtime["tracking_in_progress"] = True
     updated = 0
+    local_updated = 0
+    gemini_updated = 0
+    lost = 0
     try:
         now = _now()
         _cleanup_markers(runtime)
@@ -1071,6 +1229,56 @@ async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
                     continue
             except (TypeError, ValueError):
                 pass
+
+            local = _local_track_marker(runtime, marker)
+            if local.get("status") == "tracked":
+                old_geometry = marker.get("geometry") or {}
+                marker["geometry"] = _smooth_geometry(old_geometry, local.get("geometry") or {}, amount=0.62)
+                marker["confidence"] = float(local.get("confidence", 0.0) or 0.0)
+                marker["confidence_level"] = _confidence_level(marker["confidence"], False)
+                marker["status"] = "placed"
+                marker["approximate"] = False
+                marker["tracking_lost"] = False
+                marker["tracking_source"] = "local_template"
+                marker["label_position"] = _label_position(marker["geometry"])
+                marker["updated_at"] = now.isoformat()
+                marker["last_tracked_at"] = now.isoformat()
+                marker["local_track_count"] = int(marker.get("local_track_count", 0) or 0) + 1
+                marker["track_count"] = int(marker.get("track_count", 0) or 0) + 1
+                marker["expires_at"] = (now + timedelta(milliseconds=TRACKING_EXTENSION_MS)).isoformat()
+                if marker["local_track_count"] % 6 == 0:
+                    _refresh_marker_template(runtime, marker)
+                updated += 1
+                local_updated += 1
+                _append_marker_history(runtime, {
+                    "event": "local_tracked",
+                    "marker_id": marker_id,
+                    "label": marker.get("label"),
+                    "confidence": marker["confidence"],
+                })
+                continue
+
+            marker["local_tracker_confidence"] = float(local.get("confidence", 0.0) or 0.0)
+            marker["confidence_level"] = "low"
+            marker["tracking_source"] = "local_template"
+
+            last_gemini = marker.get("last_gemini_tracked_at")
+            try:
+                recent_gemini = last_gemini and now - datetime.fromisoformat(last_gemini) < timedelta(seconds=GEMINI_REVALIDATION_SECONDS)
+            except ValueError:
+                recent_gemini = False
+            if recent_gemini or not os.environ.get("GOOGLE_API_KEY", ""):
+                marker["tracking_lost"] = True
+                marker["last_tracked_at"] = now.isoformat()
+                lost += 1
+                set_hud_prompt(session_id, "Keep the marked target in view so I can continue tracking it.", "warning")
+                _append_marker_history(runtime, {
+                    "event": "local_tracking_low",
+                    "marker_id": marker_id,
+                    "label": marker.get("label"),
+                    "confidence": marker["local_tracker_confidence"],
+                })
+                continue
 
             target = _target_for_marker(runtime, marker)
             if not target:
@@ -1093,11 +1301,15 @@ async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
                 marker["label_position"] = _label_position(marker["geometry"])
                 marker["updated_at"] = now.isoformat()
                 marker["last_tracked_at"] = now.isoformat()
+                marker["last_gemini_tracked_at"] = now.isoformat()
+                marker["tracking_source"] = "gemini_revalidation"
                 marker["track_count"] = int(marker.get("track_count", 0) or 0) + 1
                 marker["expires_at"] = (now + timedelta(milliseconds=TRACKING_EXTENSION_MS)).isoformat()
+                _refresh_marker_template(runtime, marker)
                 updated += 1
+                gemini_updated += 1
                 _append_marker_history(runtime, {
-                    "event": "tracked",
+                    "event": "gemini_revalidated",
                     "marker_id": marker_id,
                     "label": marker.get("label"),
                     "status": status,
@@ -1107,6 +1319,9 @@ async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
                 marker["confidence_level"] = "low"
                 marker["tracking_lost"] = True
                 marker["last_tracked_at"] = now.isoformat()
+                marker["last_gemini_tracked_at"] = now.isoformat()
+                marker["tracking_source"] = "gemini_revalidation"
+                lost += 1
                 set_hud_prompt(session_id, grounded.get("follow_up_prompt") or "Move the target back into view so I can keep tracking it.", "warning")
                 _append_marker_history(runtime, {
                     "event": "tracking_lost",
@@ -1114,7 +1329,7 @@ async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
                     "label": marker.get("label"),
                     "status": status,
                 })
-        return {"updated": updated}
+        return {"updated": updated, "local_updated": local_updated, "gemini_updated": gemini_updated, "lost": lost}
     finally:
         runtime["tracking_in_progress"] = False
 
@@ -1241,6 +1456,12 @@ async def _execute_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict
             "updated_at": _now().isoformat(),
             "expires_at": (_now() + timedelta(milliseconds=expires_ms)).isoformat(),
         }
+        frame_image = _decode_frame_image(runtime.get("latest_frame_b64") or "")
+        if frame_image is not None:
+            tracker_crop = _crop_geometry_pil(frame_image, marker["geometry"], padded=False)
+            tracker_template = _encode_image_b64(tracker_crop) if tracker_crop is not None else None
+            if tracker_template:
+                marker["tracker_template_b64"] = tracker_template
         marker["confidence_level"] = _confidence_level(marker["confidence"], marker["approximate"])
         marker["label_position"] = _label_position(marker["geometry"])
         runtime["markers"][marker_id] = marker
