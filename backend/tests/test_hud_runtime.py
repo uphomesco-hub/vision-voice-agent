@@ -10,7 +10,10 @@ from hud_runtime import (
     build_hud_snapshot,
     clear_runtime,
     evaluate_step_completion,
+    get_runtime_state,
+    refresh_tracked_markers,
     run_highlight_tool,
+    set_hud_prompt,
     set_last_perception,
     set_latest_frame,
     sync_manual_bundle,
@@ -185,6 +188,74 @@ async def test_highlight_tool_retries_wrong_candidate_then_commits(monkeypatch):
         assert result["attempts"][0]["verification"]["decision"] == "retry"
         assert build_hud_snapshot(session_id, current_step_index=0)["markers"][0]["label"] == "AirPods case"
 
+    clear_runtime(session_id)
+
+
+@pytest.mark.asyncio
+async def test_tracked_marker_updates_geometry_and_history(monkeypatch):
+    session_id = "hud-tracking-session"
+    clear_runtime(session_id)
+    set_latest_frame(session_id, "fake-frame")
+    monkeypatch.setenv("GOOGLE_API_KEY", "fake-key")
+    calls = {"count": 0}
+
+    async def fake_ground_feature(_session_id, target, _action_type, allow_approximate=True):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "status": "placed",
+                "confidence": 0.9,
+                "label": target.get("label", "Rear screw"),
+                "geometry": {"type": "box", "x": 0.1, "y": 0.2, "width": 0.2, "height": 0.16},
+            }
+        return {
+            "status": "placed",
+            "confidence": 0.86,
+            "label": "Rear screw",
+            "geometry": {"type": "box", "x": 0.5, "y": 0.4, "width": 0.2, "height": 0.16},
+        }
+
+    async def fake_verify(_session_id, _target, candidate, _action_type):
+        return {
+            "decision": "accept",
+            "confidence": candidate.get("confidence", 0.8),
+            "reason": "Candidate matches target.",
+            "corrected_label": candidate.get("label"),
+            "retry_hint": "",
+        }
+
+    monkeypatch.setattr("hud_runtime.ground_feature", fake_ground_feature)
+    monkeypatch.setattr("hud_runtime.verify_grounding_candidate", fake_verify)
+
+    async with AsyncSessionLocal() as db:
+        result = await run_highlight_tool(db, session_id, {
+            "operation": "create",
+            "feature_id": "runtime:auto",
+            "target_hint": "rear screw",
+            "action_type": "inspect",
+            "reason": "user_request",
+        })
+        marker_id = result["marker_id"]
+        runtime = get_runtime_state(session_id)
+        runtime["markers"][marker_id]["last_tracked_at"] = "2020-01-01T00:00:00+00:00"
+        tracking = await refresh_tracked_markers(session_id)
+
+    marker = build_hud_snapshot(session_id, current_step_index=0)["markers"][0]
+    assert tracking["updated"] == 1
+    assert 0.1 < marker["geometry"]["x"] < 0.5
+    assert marker["track_count"] == 1
+    assert marker["confidence_level"] == "high"
+    assert any(item["event"] == "tracked" for item in runtime["marker_history"])
+    clear_runtime(session_id)
+
+
+def test_hud_snapshot_includes_prompt_and_history():
+    session_id = "hud-prompt-session"
+    clear_runtime(session_id)
+    set_hud_prompt(session_id, "Center the screw area", "warning")
+    snapshot = build_hud_snapshot(session_id, current_step_index=0)
+    assert snapshot["hud_prompt"]["message"] == "Center the screw area"
+    assert snapshot["marker_history"] == []
     clear_runtime(session_id)
 
 

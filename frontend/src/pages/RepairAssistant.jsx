@@ -34,6 +34,8 @@ export default function RepairAssistant() {
   const [hudMarkers, setHudMarkers] = useState([]);
   const [hudFeatureCatalog, setHudFeatureCatalog] = useState([]);
   const [currentStepTarget, setCurrentStepTarget] = useState(null);
+  const [hudPrompt, setHudPrompt] = useState(null);
+  const [hudMarkerHistory, setHudMarkerHistory] = useState([]);
 
   const wsRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -110,6 +112,8 @@ export default function RepairAssistant() {
         setHudMarkers(d.hud_markers || []);
         setHudFeatureCatalog(d.hud_feature_catalog || []);
         setCurrentStepTarget(d.current_step_target || null);
+        setHudPrompt(d.hud_prompt || null);
+        setHudMarkerHistory(d.marker_history || []);
       } else if (msg.type === 'status') { log('STATUS', msg.message); setStatus(msg.message);
       } else if (msg.type === 'assistant.state') {
         log('STATE', msg.state);
@@ -147,11 +151,13 @@ export default function RepairAssistant() {
           if (msg.tool === 'google_search') { setSearchQueries(msg.queries || []); setToolActivity({ tool: msg.tool, status: 'done', detail: `Searched: ${(msg.queries || []).join(', ')}` }); log('SEARCH', msg.queries);
           } else if (msg.tool === 'hud_planner') {
             const detail = msg.follow_up_prompt || (msg.result_summary ? `HUD: ${msg.result_summary}` : 'HUD updated');
+            if (msg.follow_up_prompt) setHudPrompt({ type: 'warning', message: msg.follow_up_prompt });
             setToolActivity({ tool: msg.tool, status: 'done', detail });
           } else if (msg.tool === 'highlight') {
             const detail = msg.result_summary === 'cleared'
               ? 'Cleared HUD marker'
               : msg.follow_up_prompt || (msg.result_summary ? `HUD: ${msg.result_summary}` : 'Updated HUD marker');
+            if (msg.follow_up_prompt) setHudPrompt({ type: 'warning', message: msg.follow_up_prompt });
             setToolActivity({ tool: msg.tool, status: 'done', detail });
           } else {
             if (msg.manual_id) { setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary }); setActiveManual({ id: msg.manual_id, summary: msg.result_summary }); log('MANUAL', msg.result_summary);
@@ -169,6 +175,8 @@ export default function RepairAssistant() {
         setHudMarkers(msg.markers || []);
         setHudFeatureCatalog(msg.feature_catalog || []);
         setCurrentStepTarget(msg.current_step_target || null);
+        setHudPrompt(msg.hud_prompt || null);
+        setHudMarkerHistory(msg.marker_history || []);
       }
     } catch (e) { log('ERROR', 'Parse:', e); }
   }, [playAudioChunk]);
@@ -264,7 +272,7 @@ export default function RepairAssistant() {
   const endSession = () => { log('SESSION', 'Ending'); sessionActiveRef.current = false; cleanup();
     setIsConnected(false); setIsMicEnabled(false); setVoiceState('idle'); setStatus('Ready'); setTranscript([]); setSessionId(null); sessionIdRef.current = null; reconnectCountRef.current = 0;
     setActiveManual(null); setToolActivity(null); setWarnings([]); setSteps([]); setSearchQueries([]);
-    setHudMarkers([]); setHudFeatureCatalog([]); setCurrentStepTarget(null);
+    setHudMarkers([]); setHudFeatureCatalog([]); setCurrentStepTarget(null); setHudPrompt(null); setHudMarkerHistory([]);
   };
 
   // ─── Mobile Swipe ────────────────
@@ -387,6 +395,7 @@ export default function RepairAssistant() {
                 <div className="ra-hud-overlay" data-testid="hud-overlay">
                   {visibleHudMarkers.map(marker => <HudMarker key={marker.marker_id} marker={marker} />)}
                 </div>
+                {hudPrompt && <div className={`ra-hud-correction ${hudPrompt.type || 'info'}`}>{hudPrompt.message}</div>}
                 <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
                   <div className="ra-aura-ring"></div><div className="ra-aura-ring delay-1"></div><div className="ra-aura-ring delay-2"></div>
                 </div>
@@ -427,7 +436,19 @@ export default function RepairAssistant() {
               {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-title">Active Manual</div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
               {warnings.length > 0 && <div className="ra-panel ra-warnings-panel" data-testid="warnings-panel"><div className="ra-panel-title">Warnings</div>{warnings.slice(0, 3).map((w, i) => <div key={i} className="ra-warning-item">{w}</div>)}</div>}
               {steps.length > 0 && <div className="ra-panel ra-steps-panel" data-testid="steps-panel"><div className="ra-panel-title">Steps</div>{steps.map((s, i) => <div key={i} className="ra-step-item"><span className="ra-step-num">{s.step || i + 1}</span><div className="ra-step-content"><div className="ra-step-title">{s.title}</div>{s.action && <div className="ra-step-action">{s.action}</div>}</div></div>)}</div>}
-              {hudFeatureCatalog.length > 0 && <div className="ra-panel ra-hud-panel" data-testid="hud-panel"><div className="ra-panel-title">HUD</div><div className="ra-tool-detail">{visibleHudMarkers.length ? `${visibleHudMarkers.length} active marker${visibleHudMarkers.length > 1 ? 's' : ''}` : 'Waiting for AI marker placement'}</div>{currentStepTarget && <div className="ra-step-action">{currentStepTarget.title}</div>}</div>}
+              {(hudFeatureCatalog.length > 0 || visibleHudMarkers.length > 0 || hudMarkerHistory.length > 0) && <div className="ra-panel ra-hud-panel" data-testid="hud-panel">
+                <div className="ra-panel-title">HUD</div>
+                <div className="ra-tool-detail">{visibleHudMarkers.length ? `${visibleHudMarkers.length} active marker${visibleHudMarkers.length > 1 ? 's' : ''}` : 'Waiting for AI marker placement'}</div>
+                {currentStepTarget && <div className="ra-step-action">{currentStepTarget.title}</div>}
+                {visibleHudMarkers.slice(0, 3).map(marker => <div key={marker.marker_id} className="ra-hud-debug-row">
+                  <span>{marker.label || marker.feature_id}</span>
+                  <strong>{Math.round((marker.confidence || 0) * 100)}%</strong>
+                  <em>{marker.reason || marker.action_type}</em>
+                </div>)}
+                {hudMarkerHistory.slice(-3).reverse().map((item, index) => <div key={`${item.at}-${index}`} className="ra-hud-history-row">
+                  {item.event}: {item.label || item.status || item.feature_id}
+                </div>)}
+              </div>}
               <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
                 <div className="ra-panel-title">Conversation</div>
                 <div className="ra-transcript-messages">{transcript.map((t, i) => <div key={i} className={`ra-message ${t.role}`}><span className="ra-message-role">{t.role === 'user' ? 'YOU' : t.role === 'system' ? 'SYS' : 'AI'}</span><span className="ra-message-content">{t.text}</span></div>)}<div ref={transcriptEndRef} /></div>
@@ -444,12 +465,16 @@ function u8ToB64(bytes) { let b = ''; for (let i = 0; i < bytes.length; i++) b +
 function HudMarker({ marker }) {
   const geometry = marker.geometry || {};
   const type = geometry.type || 'box';
-  const classes = `ra-hud-marker ${marker.priority || 'primary'} ${marker.action_type || 'inspect'} ${marker.approximate ? 'approximate' : ''}`;
+  const action = marker.action_type || 'inspect';
+  const confidence = Math.round((marker.confidence || 0) * 100);
+  const labelPosition = marker.label_position || getLabelPosition(geometry);
+  const classes = `ra-hud-marker ${marker.priority || 'primary'} ${action} confidence-${marker.confidence_level || 'medium'} label-${labelPosition} ${marker.approximate ? 'approximate' : ''} ${marker.tracking_lost ? 'tracking-lost' : ''} ${marker.track_count ? 'tracked' : ''}`;
+  const label = <HudLabel marker={marker} confidence={confidence} />;
   if (type === 'point') {
     return (
       <div className={`${classes} point`} style={{ left: `${(geometry.x || 0) * 100}%`, top: `${(geometry.y || 0) * 100}%` }}>
         <div className="ra-hud-point"></div>
-        <div className="ra-hud-label">{marker.label || marker.feature_id}</div>
+        {label}
       </div>
     );
   }
@@ -457,7 +482,7 @@ function HudMarker({ marker }) {
     const points = (geometry.points || []).map(point => `${point.x * 100}% ${point.y * 100}%`).join(', ');
     return (
       <div className={`${classes} polygon`} style={{ clipPath: points ? `polygon(${points})` : undefined }}>
-        <div className="ra-hud-label floating">{marker.label || marker.feature_id}</div>
+        {label}
       </div>
     );
   }
@@ -472,13 +497,48 @@ function HudMarker({ marker }) {
         <div className="ra-hud-line" style={{ left: `${start.x * 100}%`, top: `${start.y * 100}%`, width: `${length}%`, transform: `translateY(-50%) rotate(${angle}deg)` }}>
           <div className="ra-hud-arrow-head"></div>
         </div>
-        <div className="ra-hud-label" style={{ left: `${end.x * 100}%`, top: `${end.y * 100}%` }}>{marker.label || marker.feature_id}</div>
+        <div className={`ra-hud-label path-label label-${labelPosition}`} style={{ left: `${end.x * 100}%`, top: `${end.y * 100}%` }}><HudLabelContent marker={marker} confidence={confidence} /></div>
       </div>
     );
   }
   return (
     <div className={`${classes} box`} style={{ left: `${(geometry.x || 0) * 100}%`, top: `${(geometry.y || 0) * 100}%`, width: `${(geometry.width || 0.2) * 100}%`, height: `${(geometry.height || 0.2) * 100}%` }}>
-      <div className="ra-hud-label">{marker.label || marker.feature_id}</div>
+      <div className="ra-hud-action-glyph">{actionGlyph(action)}</div>
+      {label}
     </div>
+  );
+}
+
+function getLabelPosition(geometry) {
+  const x = geometry.x || 0.5;
+  const y = geometry.y || 0.5;
+  const width = geometry.width || 0;
+  if (y < 0.16) return 'bottom';
+  if (x + width > 0.78) return 'left';
+  if (x < 0.14) return 'right';
+  return 'top';
+}
+
+function actionGlyph(action) {
+  if (action === 'unscrew_ccw') return 'CCW';
+  if (action === 'pull') return 'PULL';
+  if (action === 'lift') return 'LIFT';
+  if (action === 'pry') return 'PRY';
+  if (action === 'slide') return 'SLIDE';
+  if (action === 'hold_here') return 'HOLD';
+  if (action === 'danger' || action === 'avoid') return '!';
+  return '+';
+}
+
+function HudLabel({ marker, confidence }) {
+  return <div className="ra-hud-label"><HudLabelContent marker={marker} confidence={confidence} /></div>;
+}
+
+function HudLabelContent({ marker, confidence }) {
+  return (
+    <>
+      <span>{marker.label || marker.feature_id}</span>
+      <small>{confidence}%{marker.track_count ? ` | tracking` : ''}</small>
+    </>
   );
 }

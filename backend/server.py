@@ -27,6 +27,7 @@ from hud_runtime import (
     get_runtime_state,
     maybe_track_pending_confirmation,
     run_highlight_tool,
+    refresh_tracked_markers,
     set_last_perception,
     set_latest_frame,
     should_highlight_current_step,
@@ -643,6 +644,19 @@ async def ws_session(websocket: WebSocket):
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": raw_b64}]}
                     }))
+                    if frame_count % 2 == 0:
+                        _track_sid = session_id
+                        async def _run_hud_tracking():
+                            try:
+                                result = await refresh_tracked_markers(_track_sid)
+                                if result.get("updated", 0) > 0:
+                                    async with AsyncSessionLocal() as db:
+                                        sess = await SessionStore.get_session(db, _track_sid)
+                                        step = sess.current_step or 0 if sess else 0
+                                    await websocket.send_json(build_hud_snapshot(_track_sid, current_step_index=step))
+                            except Exception as exc:
+                                logger.error(f"[{_track_sid}] HUD tracking error: {exc}")
+                        asyncio.create_task(_run_hud_tracking())
 
                     # Frame-diff nudge: only trigger when the scene actually changes
                     curr_bytes = base64.b64decode(raw_b64)

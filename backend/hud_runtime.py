@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 GROUNDING_MODEL = "gemini-2.5-flash"
 GROUNDING_MAX_ATTEMPTS = 3
+TRACKING_MIN_INTERVAL_SECONDS = 1.5
+TRACKING_EXTENSION_MS = 4500
 
 _runtime: Dict[str, Dict[str, Any]] = {}
 PERSON_LABEL_TOKENS = {
@@ -207,9 +209,12 @@ def _get_runtime(session_id: str) -> Dict[str, Any]:
             "manual_id": None,
             "manual_summary": None,
             "markers": {},
+            "marker_history": [],
+            "hud_prompt": None,
             "pending_confirmation": None,
             "runtime_feature_counter": 0,
             "manual_step_highlighted": None,
+            "tracking_in_progress": False,
         }
     return _runtime[session_id]
 
@@ -230,6 +235,27 @@ def set_last_perception(session_id: str, observation: Optional[Dict[str, Any]]):
 
 def get_runtime_state(session_id: str) -> Dict[str, Any]:
     return _get_runtime(session_id)
+
+
+def _append_marker_history(runtime: Dict[str, Any], entry: Dict[str, Any]):
+    item = {
+        "at": _now().isoformat(),
+        **entry,
+    }
+    runtime["marker_history"].append(item)
+    runtime["marker_history"] = runtime["marker_history"][-8:]
+
+
+def set_hud_prompt(session_id: str, message: Optional[str], prompt_type: str = "info"):
+    runtime = _get_runtime(session_id)
+    if not message:
+        runtime["hud_prompt"] = None
+        return
+    runtime["hud_prompt"] = {
+        "message": message,
+        "type": prompt_type,
+        "updated_at": _now().isoformat(),
+    }
 
 
 def build_manual_hud_bundle(manual: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,7 +496,19 @@ def _cleanup_markers(runtime: Dict[str, Any]):
     now = _now()
     expired = [marker_id for marker_id, marker in runtime["markers"].items() if marker.get("expires_at") and datetime.fromisoformat(marker["expires_at"]) <= now]
     for marker_id in expired:
+        _append_marker_history(runtime, {
+            "event": "expired",
+            "marker_id": marker_id,
+            "label": runtime["markers"].get(marker_id, {}).get("label"),
+        })
         runtime["markers"].pop(marker_id, None)
+    prompt = runtime.get("hud_prompt")
+    if prompt and prompt.get("updated_at"):
+        try:
+            if now - datetime.fromisoformat(prompt["updated_at"]) > timedelta(seconds=6):
+                runtime["hud_prompt"] = None
+        except ValueError:
+            runtime["hud_prompt"] = None
 
 
 def _trim_marker_density(runtime: Dict[str, Any]):
@@ -499,6 +537,8 @@ def build_hud_snapshot(session_id: str, current_step_index: int = 0) -> Dict[str
         "feature_catalog": list(runtime["feature_catalog"].values()),
         "current_step_target": current_step_target,
         "pending_confirmation": runtime["pending_confirmation"],
+        "marker_history": runtime["marker_history"][-5:],
+        "hud_prompt": runtime["hud_prompt"],
     }
 
 
@@ -910,6 +950,75 @@ def _normalize_geometry(geometry: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
+def _confidence_level(confidence: float, approximate: bool = False) -> str:
+    if approximate or confidence < 0.62:
+        return "low"
+    if confidence < 0.82:
+        return "medium"
+    return "high"
+
+
+def _label_position(geometry: Dict[str, Any]) -> str:
+    x = _normalize_value(geometry.get("x")) or 0.5
+    y = _normalize_value(geometry.get("y")) or 0.5
+    width = _normalize_value(geometry.get("width")) or 0.0
+    if y < 0.16:
+        return "bottom"
+    if x + width > 0.78:
+        return "left"
+    if x < 0.14:
+        return "right"
+    return "top"
+
+
+def _smooth_number(old_value: Any, new_value: Any, amount: float) -> Optional[float]:
+    old_num = _normalize_value(old_value)
+    new_num = _normalize_value(new_value)
+    if old_num is None:
+        return new_num
+    if new_num is None:
+        return old_num
+    return max(0.0, min(1.0, old_num + (new_num - old_num) * amount))
+
+
+def _smooth_geometry(old_geometry: Dict[str, Any], new_geometry: Dict[str, Any], amount: float = 0.48) -> Dict[str, Any]:
+    if not old_geometry or old_geometry.get("type") != new_geometry.get("type"):
+        return new_geometry
+    gtype = new_geometry.get("type") or "box"
+    smoothed = {"type": gtype}
+    for field in ("x", "y", "width", "height"):
+        value = _smooth_number(old_geometry.get(field), new_geometry.get(field), amount)
+        if value is not None:
+            smoothed[field] = value
+    old_points = old_geometry.get("points") or []
+    new_points = new_geometry.get("points") or []
+    if old_points and new_points and len(old_points) == len(new_points):
+        smoothed["points"] = []
+        for old_point, new_point in zip(old_points, new_points):
+            x = _smooth_number(old_point.get("x"), new_point.get("x"), amount)
+            y = _smooth_number(old_point.get("y"), new_point.get("y"), amount)
+            if x is not None and y is not None:
+                smoothed["points"].append({"x": x, "y": y})
+    elif new_points:
+        smoothed["points"] = new_points
+    return smoothed
+
+
+def _target_for_marker(runtime: Dict[str, Any], marker: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if marker.get("source_target"):
+        return dict(marker["source_target"])
+    feature_id = marker.get("feature_id")
+    if feature_id == "manual:current_step":
+        return None
+    target = runtime["feature_catalog"].get(feature_id)
+    if target:
+        return dict(target)
+    target_hint = marker.get("target_hint") or marker.get("label") or feature_id
+    if feature_id and target_hint:
+        return _build_runtime_target(feature_id, target_hint)
+    return None
+
+
 async def run_highlight_tool(db: AsyncSession, session_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
     tool_run = SessionToolRun(
         id=str(uuid.uuid4()),
@@ -937,6 +1046,79 @@ async def run_highlight_tool(db: AsyncSession, session_id: str, args: Dict[str, 
         return {"status": "not_found", "error": str(exc)}
 
 
+async def refresh_tracked_markers(session_id: str) -> Dict[str, Any]:
+    runtime = _get_runtime(session_id)
+    if runtime.get("tracking_in_progress"):
+        return {"updated": 0, "skipped": "busy"}
+    if not runtime.get("latest_frame_b64"):
+        return {"updated": 0, "skipped": "no_frame"}
+    if not os.environ.get("GOOGLE_API_KEY", ""):
+        return {"updated": 0, "skipped": "no_api_key"}
+
+    runtime["tracking_in_progress"] = True
+    updated = 0
+    try:
+        now = _now()
+        _cleanup_markers(runtime)
+        for marker_id, marker in list(runtime["markers"].items()):
+            if not marker.get("tracking"):
+                continue
+            if marker.get("status") not in {"placed", "approximate"}:
+                continue
+            try:
+                last = datetime.fromisoformat(marker.get("last_tracked_at") or marker.get("updated_at"))
+                if now - last < timedelta(seconds=TRACKING_MIN_INTERVAL_SECONDS):
+                    continue
+            except (TypeError, ValueError):
+                pass
+
+            target = _target_for_marker(runtime, marker)
+            if not target:
+                continue
+            grounded = await ground_feature_with_verification(
+                session_id,
+                target,
+                marker.get("action_type", "inspect"),
+                allow_approximate=True,
+            )
+            status = grounded.get("status")
+            if status in {"placed", "approximate"}:
+                old_geometry = marker.get("geometry") or {}
+                new_geometry = grounded.get("geometry") or {}
+                marker["geometry"] = _smooth_geometry(old_geometry, new_geometry)
+                marker["confidence"] = float(grounded.get("confidence", marker.get("confidence", 0.0)) or 0.0)
+                marker["confidence_level"] = _confidence_level(marker["confidence"], status == "approximate")
+                marker["status"] = status
+                marker["approximate"] = status == "approximate"
+                marker["label_position"] = _label_position(marker["geometry"])
+                marker["updated_at"] = now.isoformat()
+                marker["last_tracked_at"] = now.isoformat()
+                marker["track_count"] = int(marker.get("track_count", 0) or 0) + 1
+                marker["expires_at"] = (now + timedelta(milliseconds=TRACKING_EXTENSION_MS)).isoformat()
+                updated += 1
+                _append_marker_history(runtime, {
+                    "event": "tracked",
+                    "marker_id": marker_id,
+                    "label": marker.get("label"),
+                    "status": status,
+                    "confidence": marker["confidence"],
+                })
+            elif status in {"not_visible", "not_found"}:
+                marker["confidence_level"] = "low"
+                marker["tracking_lost"] = True
+                marker["last_tracked_at"] = now.isoformat()
+                set_hud_prompt(session_id, grounded.get("follow_up_prompt") or "Move the target back into view so I can keep tracking it.", "warning")
+                _append_marker_history(runtime, {
+                    "event": "tracking_lost",
+                    "marker_id": marker_id,
+                    "label": marker.get("label"),
+                    "status": status,
+                })
+        return {"updated": updated}
+    finally:
+        runtime["tracking_in_progress"] = False
+
+
 async def _execute_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict[str, Any]:
     runtime = _get_runtime(session_id)
     operation = (args.get("operation") or "create").lower()
@@ -944,9 +1126,21 @@ async def _execute_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict
 
     if operation == "clear":
         if marker_id and marker_id in runtime["markers"]:
+            _append_marker_history(runtime, {
+                "event": "cleared",
+                "marker_id": marker_id,
+                "label": runtime["markers"][marker_id].get("label"),
+            })
             runtime["markers"].pop(marker_id, None)
         elif marker_id == "all":
+            for existing in runtime["markers"].values():
+                _append_marker_history(runtime, {
+                    "event": "cleared",
+                    "marker_id": existing.get("marker_id"),
+                    "label": existing.get("label"),
+                })
             runtime["markers"].clear()
+        set_hud_prompt(session_id, None)
         return {
             "status": "cleared",
             "marker_id": marker_id,
@@ -1008,6 +1202,15 @@ async def _execute_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict
         if status in {"not_visible", "ambiguous", "not_found"}:
             if target.get("target_kind") == "person" and status == "not_visible" and not grounded.get("follow_up_prompt"):
                 grounded["follow_up_prompt"] = "Keep yourself centered in the frame so I can mark you."
+            if grounded.get("follow_up_prompt"):
+                set_hud_prompt(session_id, grounded["follow_up_prompt"], "warning")
+            _append_marker_history(runtime, {
+                "event": "failed",
+                "feature_id": feature_id,
+                "label": target.get("label"),
+                "status": status,
+                "reason": grounded.get("follow_up_prompt"),
+            })
             grounded["feature_id"] = feature_id
             grounded["markers"] = list(runtime["markers"].values())
             return grounded
@@ -1029,12 +1232,28 @@ async def _execute_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict
             "status": status,
             "geometry": grounded.get("geometry") or {},
             "tracking": True,
+            "tracking_mode": "dynamic_reground",
+            "track_count": 0,
+            "target_hint": target_hint or target.get("original_hint") or target.get("label"),
+            "source_target": target,
+            "created_from_frame_at": runtime.get("latest_frame_at"),
             "approximate": status == "approximate",
             "updated_at": _now().isoformat(),
             "expires_at": (_now() + timedelta(milliseconds=expires_ms)).isoformat(),
         }
+        marker["confidence_level"] = _confidence_level(marker["confidence"], marker["approximate"])
+        marker["label_position"] = _label_position(marker["geometry"])
         runtime["markers"][marker_id] = marker
         _trim_marker_density(runtime)
+        set_hud_prompt(session_id, None)
+        _append_marker_history(runtime, {
+            "event": "placed" if operation == "create" else "updated",
+            "marker_id": marker_id,
+            "label": marker["label"],
+            "status": status,
+            "confidence": marker["confidence"],
+            "reason": marker["reason"],
+        })
         return {
             "status": status,
             "marker_id": marker_id,
