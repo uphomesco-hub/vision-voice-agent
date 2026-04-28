@@ -137,12 +137,17 @@ export default function RepairAssistant() {
           log('TOOL', `${msg.tool} running`, msg.args);
           const detail = msg.tool === 'lookup_manual'
             ? (`Looking up: ${msg.args?.brand || ''} ${msg.args?.model || ''}`.trim() || 'Searching...')
+            : msg.tool === 'hud_planner'
+              ? 'HUD is choosing a marker...'
             : msg.tool === 'highlight'
               ? 'Placing HUD marker...'
               : `Running ${msg.tool}...`;
           setToolActivity({ tool: msg.tool, status: 'running', detail }); setVoiceState('thinking'); setStatus(`Running ${msg.tool}...`);
         } else if (msg.status === 'done') { log('TOOL', `${msg.tool} done:`, msg.result_summary);
           if (msg.tool === 'google_search') { setSearchQueries(msg.queries || []); setToolActivity({ tool: msg.tool, status: 'done', detail: `Searched: ${(msg.queries || []).join(', ')}` }); log('SEARCH', msg.queries);
+          } else if (msg.tool === 'hud_planner') {
+            const detail = msg.follow_up_prompt || (msg.result_summary ? `HUD: ${msg.result_summary}` : 'HUD updated');
+            setToolActivity({ tool: msg.tool, status: 'done', detail });
           } else if (msg.tool === 'highlight') {
             const detail = msg.result_summary === 'cleared'
               ? 'Cleared HUD marker'

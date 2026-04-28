@@ -33,6 +33,11 @@ from hud_runtime import (
     sync_manual_bundle,
     user_confirms_step,
 )
+from hud_planner import (
+    clear_hud_planner_state,
+    is_hud_worthy_user_request,
+    run_hud_planner,
+)
 from nudge_engine import NudgeEngine
 from vision_perception import perceive_scene, observation_signature
 
@@ -138,6 +143,65 @@ async def emit_step_highlight_if_needed(gemini_ws, client_ws: WebSocket, session
         }
     }))
     await send_hud_state(client_ws, session_id, current_step=current_step)
+
+
+def _hud_planner_summary(result: Dict[str, Any]) -> str:
+    highlight = result.get("highlight_result") or {}
+    if highlight.get("status"):
+        attempts = highlight.get("attempts") or []
+        suffix = f" ({len(attempts)} attempt{'s' if len(attempts) != 1 else ''})" if attempts else ""
+        return f"{highlight.get('status')}{suffix}"
+    if result.get("decision") == "ask_user":
+        return result.get("assistant_hint") or result.get("reason") or "Needs a clearer target"
+    return result.get("reason") or result.get("decision") or "No HUD marker needed"
+
+
+async def run_hud_planner_and_emit(
+    client_ws: WebSocket,
+    session_id: str,
+    event: str,
+    user_text: str = "",
+    current_step: Optional[int] = None,
+    observation: Optional[Dict[str, Any]] = None,
+    force: bool = False,
+) -> Dict[str, Any]:
+    if current_step is None:
+        async with AsyncSessionLocal() as db:
+            sess = await SessionStore.get_session(db, session_id)
+            current_step = sess.current_step or 0 if sess else 0
+    if force:
+        await client_ws.send_json({
+            "type": "tool.status",
+            "tool": "hud_planner",
+            "status": "running",
+            "args": {"event": event, "user_text": user_text},
+        })
+    async with AsyncSessionLocal() as db:
+        result = await run_hud_planner(
+            db,
+            session_id=session_id,
+            event=event,
+            user_text=user_text,
+            current_step=current_step or 0,
+            observation=observation,
+            force=force,
+        )
+    highlight = result.get("highlight_result") or {}
+    should_report = force or result.get("decision") in {"mark", "clear", "ask_user"} or highlight.get("status")
+    if should_report:
+        await client_ws.send_json({
+            "type": "tool.status",
+            "tool": "hud_planner",
+            "status": "done",
+            "result_summary": _hud_planner_summary(result),
+            "manual_id": None,
+            "warnings": [],
+            "steps": [],
+            "follow_up_prompt": highlight.get("follow_up_prompt") or result.get("assistant_hint"),
+        })
+    if highlight.get("status"):
+        await send_hud_state(client_ws, session_id, current_step=current_step or 0)
+    return result
 
 
 def is_explicit_mark_request(text: str) -> bool:
@@ -383,6 +447,7 @@ async def ws_session(websocket: WebSocket):
                 "tool_guidance_sent": False,
                 "highlight_called": False,
                 "retry_sent": False,
+                "hud_planner_called": False,
             }
             try:
                 async for raw_msg in gemini_ws:
@@ -462,6 +527,7 @@ async def ws_session(websocket: WebSocket):
                             logger.info(f"[{session_id}] Turn complete")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
+                            planner_marked = False
                             # Persist turns
                             async with AsyncSessionLocal() as db:
                                 if user_buf.strip():
@@ -476,25 +542,53 @@ async def ws_session(websocket: WebSocket):
                                         await emit_step_highlight_if_needed(gemini_ws, websocket, session_id, new_step)
                                 if asst_buf.strip():
                                     await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
+                            if user_buf.strip():
+                                force_plan = is_hud_worthy_user_request(user_buf) or turn_flags["user_requested_highlight"]
+                                planner_result = await run_hud_planner_and_emit(
+                                    websocket,
+                                    session_id,
+                                    event="user_turn",
+                                    user_text=user_buf.strip(),
+                                    force=force_plan,
+                                )
+                                turn_flags["hud_planner_called"] = True
+                                planner_highlight = planner_result.get("highlight_result") or {}
+                                planner_marked = planner_highlight.get("status") in {"placed", "approximate", "cleared"}
                             if user_buf.strip() and is_explicit_mark_request(user_buf) and not turn_flags["highlight_called"] and not turn_flags["retry_sent"]:
-                                turn_flags["retry_sent"] = True
-                                logger.info(f"[{session_id}] Retrying explicit mark request without tool call")
-                                await gemini_ws.send(json.dumps({
-                                    "clientContent": {
-                                        "turns": [{
-                                            "role": "user",
-                                            "parts": [{
-                                                "text": (
-                                                    f'[TOOL_RETRY] The user explicitly asked you to mark something: "{user_buf.strip()}". '
-                                                    "You answered without calling highlight. Retry now. Call highlight first. "
-                                                    'Use feature_id="runtime:auto" with a target_hint from the user request if needed. '
-                                                    "After the tool returns, answer in one short sentence."
-                                                )
-                                            }]
-                                        }],
-                                        "turnComplete": True,
-                                    }
-                                }))
+                                if planner_marked:
+                                    await gemini_ws.send(json.dumps({
+                                        "clientContent": {
+                                            "turns": [{
+                                                "role": "user",
+                                                "parts": [{
+                                                    "text": (
+                                                        f'[HUD_PLANNER_RESULT] The independent HUD planner handled the user request: "{user_buf.strip()}". '
+                                                        "A verified marker has been placed or updated. Acknowledge it in one short sentence and continue helping."
+                                                    )
+                                                }]
+                                            }],
+                                            "turnComplete": True,
+                                        }
+                                    }))
+                                else:
+                                    turn_flags["retry_sent"] = True
+                                    logger.info(f"[{session_id}] Retrying explicit mark request without tool call")
+                                    await gemini_ws.send(json.dumps({
+                                        "clientContent": {
+                                            "turns": [{
+                                                "role": "user",
+                                                "parts": [{
+                                                    "text": (
+                                                        f'[TOOL_RETRY] The user explicitly asked you to mark something: "{user_buf.strip()}". '
+                                                        "You answered without calling highlight. Retry now. Call highlight first. "
+                                                        'Use feature_id="runtime:auto" with a target_hint from the user request if needed. '
+                                                        "After the tool returns, answer in one short sentence."
+                                                    )
+                                                }]
+                                            }],
+                                            "turnComplete": True,
+                                        }
+                                    }))
                             user_buf = ""
                             asst_buf = ""
                             turn_flags = {
@@ -502,6 +596,7 @@ async def ws_session(websocket: WebSocket):
                                 "tool_guidance_sent": False,
                                 "highlight_called": False,
                                 "retry_sent": False,
+                                "hud_planner_called": False,
                             }
 
                     except Exception as e:
@@ -670,6 +765,16 @@ async def ws_session(websocket: WebSocket):
                                         "safety_concern": safety,
                                     }, ensure_ascii=False)
 
+                                    planner_result = await run_hud_planner_and_emit(
+                                        websocket,
+                                        _snap_sid,
+                                        event="vision_update",
+                                        current_step=current_step,
+                                        observation=obs,
+                                        force=bool(safety),
+                                    )
+                                    planner_highlight = planner_result.get("highlight_result") or {}
+
                                     if safety:
                                         nudge_text = (
                                             f"[SAFETY_ALERT: {safety}] Look at the current frame and warn the user about this specific concern right now, in one sentence."
@@ -683,6 +788,7 @@ async def ws_session(websocket: WebSocket):
                                             "If focus_area is given, direct your attention there first. "
                                             "Never contradict the verified facts. Never claim user actions (no 'removed', 'installed'); "
                                             "describe current state only. If safety_concern is non-empty, interrupt immediately about that. "
+                                            "If the HUD planner placed a marker, refer to it briefly as the marked target. "
                                             "Do not read the JSON aloud — use it as reference, narrate naturally."
                                         )
 
@@ -694,10 +800,14 @@ async def ws_session(websocket: WebSocket):
                                     }))
                                     logger.info(f"[{_snap_sid}] VISION_UPDATE sent (conf={confidence:.2f}, changes={len(changes)})")
                                     await _ws_send({
-                                        "type": "vision.perception", "status": "update_sent",
-                                        "confidence": confidence, "device_state": obs.get("device_state", ""),
-                                        "changes": changes, "safety_concern": safety, "diff": round(_snap_diff, 1),
-                                    })
+                                            "type": "vision.perception", "status": "update_sent",
+                                            "confidence": confidence, "device_state": obs.get("device_state", ""),
+                                            "changes": changes, "safety_concern": safety, "diff": round(_snap_diff, 1),
+                                            "hud_planner": {
+                                                "decision": planner_result.get("decision"),
+                                                "highlight_status": planner_highlight.get("status"),
+                                            },
+                                        })
                                     await _ws_send(build_hud_snapshot(_snap_sid, current_step_index=current_step))
                                 except Exception as e:
                                     logger.error(f"[{_snap_sid}] perception task error: {e}")
@@ -711,6 +821,14 @@ async def ws_session(websocket: WebSocket):
                 elif t == "text":
                     txt = msg.get("content", "")
                     if txt:
+                        if is_hud_worthy_user_request(txt):
+                            asyncio.create_task(run_hud_planner_and_emit(
+                                websocket,
+                                session_id,
+                                event="user_text",
+                                user_text=txt,
+                                force=True,
+                            ))
                         await gemini_ws.send(json.dumps({
                             "clientContent": {"turns": [{"role": "user", "parts": [{"text": txt}]}], "turnComplete": True}
                         }))
@@ -783,6 +901,7 @@ async def ws_session(websocket: WebSocket):
         if intentional_end and session_id:
             _clear_perception_state(session_id)
             clear_runtime(session_id)
+            clear_hud_planner_state(session_id)
 
 
 async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
