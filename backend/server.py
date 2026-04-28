@@ -12,11 +12,27 @@ import websockets
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from PIL import Image
+import re
 
 from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
 from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
+from hud_runtime import (
+    build_hud_snapshot,
+    clear_pending_confirmation,
+    clear_runtime,
+    evaluate_step_completion,
+    get_pending_confirmation_prompt,
+    get_runtime_state,
+    maybe_track_pending_confirmation,
+    run_highlight_tool,
+    set_last_perception,
+    set_latest_frame,
+    should_highlight_current_step,
+    sync_manual_bundle,
+    user_confirms_step,
+)
 from nudge_engine import NudgeEngine
 from vision_perception import perceive_scene, observation_signature
 
@@ -73,6 +89,75 @@ LOOKUP_MANUAL_DECL = {
     }
 }
 
+HIGHLIGHT_DECL = {
+    "name": "highlight",
+    "description": (
+        "Control the repair HUD. Use this when the user asks you to mark something or when a manual step, hidden fastener, "
+        "or safety hazard would benefit from a visual overlay. For direct mark requests, call this before speaking. "
+        "Use feature_id='manual:current_step' to mark the active manual target and feature_id='runtime:auto' with target_hint "
+        "to mark an ad-hoc part from the current frame."
+    ),
+    "parameters": {
+        "type": "OBJECT",
+        "properties": {
+            "operation": {"type": "STRING", "enum": ["create", "update", "clear"]},
+            "feature_id": {"type": "STRING", "description": "Stable HUD feature id such as manual:rear_visible_1, manual:current_step, or runtime:auto"},
+            "marker_id": {"type": "STRING", "description": "Existing marker id for update or clear"},
+            "action_type": {"type": "STRING", "enum": ["inspect", "unscrew_ccw", "pull", "pry", "lift", "slide", "avoid", "hold_here", "danger"]},
+            "reason": {"type": "STRING", "enum": ["user_request", "manual_step", "safety", "assistant_guidance"]},
+            "label": {"type": "STRING"},
+            "priority": {"type": "STRING", "enum": ["primary", "secondary"]},
+            "expires_ms": {"type": "NUMBER"},
+            "target_hint": {"type": "STRING", "description": "Extra natural-language target description when feature_id is runtime:auto or the scene is ambiguous"},
+            "allow_approximate": {"type": "BOOLEAN"},
+        },
+        "required": ["operation"],
+    },
+}
+
+
+async def send_hud_state(client_ws: WebSocket, session_id: str, current_step: int = 0):
+    await client_ws.send_json(build_hud_snapshot(session_id, current_step_index=current_step))
+
+
+async def emit_step_highlight_if_needed(gemini_ws, client_ws: WebSocket, session_id: str, current_step: int):
+    step_target = should_highlight_current_step(session_id, current_step)
+    if not step_target:
+        return
+    prompt = (
+        f"[STEP_TARGET] Manual step {step_target.get('step')}: {step_target.get('title', '')}.\n"
+        f"Instruction: {step_target.get('instruction', '')}\n"
+        f"Primary feature id: {step_target.get('primary_feature_id')}\n"
+        f"Suggested action: {step_target.get('action_type', 'inspect')}\n"
+        "If a visual marker would help right now, call highlight before you speak."
+    )
+    await gemini_ws.send(json.dumps({
+        "clientContent": {
+            "turns": [{"role": "user", "parts": [{"text": prompt}]}],
+            "turnComplete": True,
+        }
+    }))
+    await send_hud_state(client_ws, session_id, current_step=current_step)
+
+
+def is_explicit_mark_request(text: str) -> bool:
+    normalized = (text or "").lower().strip()
+    if not normalized:
+        return False
+    patterns = [
+        r"\bmark (this|that|it|this one|that one|me)\b",
+        r"\bhighlight (this|that|it|this one|that one)\b",
+        r"\bpoint (to|at) (this|that|it|this one|that one)\b",
+        r"\bcircle (this|that|it|this one|that one)\b",
+        r"\boutline (this|that|it|this one|that one)\b",
+        r"\bshow me which\b",
+        r"\bcan you mark\b",
+        r"\bcan you highlight\b",
+        r"\bwhich screw\b",
+        r"\bwhich one\b",
+    ]
+    return any(re.search(pattern, normalized) for pattern in patterns)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Server starting — init DB...")
@@ -109,7 +194,14 @@ async def create_session(payload: dict, db: AsyncSession = Depends(get_db)):
 @api.get("/sessions/{sid}/state")
 async def get_state(sid: str, db: AsyncSession = Depends(get_db)):
     st = await SessionStore.get_session_state(db, sid)
-    return st or {"error": "Session not found"}
+    if not st:
+        return {"error": "Session not found"}
+    st.update({
+        "hud_markers": build_hud_snapshot(sid, current_step_index=st.get("current_step", 0)).get("markers", []),
+        "hud_feature_catalog": build_hud_snapshot(sid, current_step_index=st.get("current_step", 0)).get("feature_catalog", []),
+        "current_step_target": build_hud_snapshot(sid, current_step_index=st.get("current_step", 0)).get("current_step_target"),
+    })
+    return st
 
 @api.get("/sessions/{sid}/logs")
 async def get_logs(sid: str, db: AsyncSession = Depends(get_db)):
@@ -140,6 +232,7 @@ async def get_full_transcript(sid: str, db: AsyncSession = Depends(get_db)):
         "transcript": [{"role": t["role"], "text": t["content"], "source": t["source_type"], "at": t["created_at"]} for t in state["turns"]],
         "tool_runs": [{"tool": tr["tool_name"], "status": tr["status"], "input": tr["input"], "output": tr["output"], "at": tr["created_at"]} for tr in state["tool_runs"]],
         "observations": state["observations"],
+        "hud_markers": build_hud_snapshot(sid, current_step_index=state.get("current_step", 0)).get("markers", []),
     }
 
 app.include_router(api)
@@ -209,6 +302,7 @@ async def ws_session(websocket: WebSocket):
                 if sess and sess.active_manual_id:
                     manual = await get_manual_by_id(db, sess.active_manual_id)
                     if manual:
+                        sync_manual_bundle(session_id, manual)
                         active_manual_context = f"\n\nACTIVE MANUAL (already loaded — do NOT call lookup_manual again): {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
 
                 # Load previous tool runs so Gemini doesn't repeat them
@@ -242,7 +336,7 @@ async def ws_session(websocket: WebSocket):
                     "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_id}}}
                 },
                 "system_instruction": {"parts": [{"text": full_prompt}]},
-                "tools": [{"function_declarations": [LOOKUP_MANUAL_DECL]}],
+                "tools": [{"function_declarations": [LOOKUP_MANUAL_DECL, HIGHLIGHT_DECL]}],
                 "input_audio_transcription": {},
                 "output_audio_transcription": {}
             }
@@ -253,13 +347,20 @@ async def ws_session(websocket: WebSocket):
 
         await websocket.send_json({"type": "assistant.state", "state": "listening"})
         await websocket.send_json({"type": "status", "message": "Connected! Start speaking..."})
+        await send_hud_state(websocket, session_id, current_step=0)
 
         # Send session state to client if resuming
         if resume_id:
             async with AsyncSessionLocal() as db:
                 state = await SessionStore.get_session_state(db, session_id)
                 if state:
+                    state.update({
+                        "hud_markers": build_hud_snapshot(session_id, current_step_index=state.get("current_step", 0)).get("markers", []),
+                        "hud_feature_catalog": build_hud_snapshot(session_id, current_step_index=state.get("current_step", 0)).get("feature_catalog", []),
+                        "current_step_target": build_hud_snapshot(session_id, current_step_index=state.get("current_step", 0)).get("current_step_target"),
+                    })
                     await websocket.send_json({"type": "session.state", "data": state})
+                    await emit_step_highlight_if_needed(gemini_ws, websocket, session_id, state.get("current_step", 0))
 
         # Trigger greeting — tell Gemini to introduce itself
         if not resume_id:
@@ -277,6 +378,12 @@ async def ws_session(websocket: WebSocket):
             nonlocal alive, ai_speaking
             user_buf = ""
             asst_buf = ""
+            turn_flags = {
+                "user_requested_highlight": False,
+                "tool_guidance_sent": False,
+                "highlight_called": False,
+                "retry_sent": False,
+            }
             try:
                 async for raw_msg in gemini_ws:
                     if not alive:
@@ -287,7 +394,9 @@ async def ws_session(websocket: WebSocket):
                         # Tool call
                         tc = data.get("toolCall")
                         if tc:
-                            await handle_tool_call(tc, session_id, gemini_ws, websocket)
+                            tool_info = await handle_tool_call(tc, session_id, gemini_ws, websocket)
+                            if tool_info.get("highlight_called"):
+                                turn_flags["highlight_called"] = True
                             continue
 
                         sc = data.get("serverContent")
@@ -310,6 +419,24 @@ async def ws_session(websocket: WebSocket):
                             user_buf += itx["text"]
                             nudge.user_spoke()
                             await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
+                            if is_explicit_mark_request(user_buf) and not turn_flags["tool_guidance_sent"] and not turn_flags["highlight_called"]:
+                                turn_flags["user_requested_highlight"] = True
+                                turn_flags["tool_guidance_sent"] = True
+                                await gemini_ws.send(json.dumps({
+                                    "clientContent": {
+                                        "turns": [{
+                                            "role": "user",
+                                            "parts": [{
+                                                "text": (
+                                                    "[TOOL_REQUIREMENT] The user's current request is an explicit request to mark or highlight something in the camera view. "
+                                                    "Before you answer, you MUST call highlight. If the target is unclear, still call highlight with "
+                                                    'feature_id="runtime:auto" and a target_hint from the user request, then speak based on the tool result.'
+                                                )
+                                            }]
+                                        }],
+                                        "turnComplete": True,
+                                    }
+                                }))
 
                         # Output transcription
                         otx = sc.get("outputTranscription")
@@ -339,20 +466,43 @@ async def ws_session(websocket: WebSocket):
                             async with AsyncSessionLocal() as db:
                                 if user_buf.strip():
                                     await SessionStore.add_turn(db, session_id, "user", user_buf.strip())
+                                    sess = await SessionStore.get_session(db, session_id)
+                                    if sess and user_confirms_step(session_id, user_buf):
+                                        new_step = (sess.current_step or 0) + 1
+                                        await SessionStore.update_session(db, session_id, current_step=new_step)
+                                        clear_pending_confirmation(session_id)
+                                        await websocket.send_json({"type": "step.update", "step": new_step})
+                                        await send_hud_state(websocket, session_id, current_step=new_step)
+                                        await emit_step_highlight_if_needed(gemini_ws, websocket, session_id, new_step)
                                 if asst_buf.strip():
                                     await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
-                                    # Check if assistant mentioned completing a step — advance step counter
-                                    step_keywords = ["next step", "step done", "move on to", "that's done", "let's proceed", "now we need to", "good, now"]
-                                    lower_asst = asst_buf.lower()
-                                    if any(kw in lower_asst for kw in step_keywords):
-                                        sess = await SessionStore.get_session(db, session_id)
-                                        if sess:
-                                            new_step = (sess.current_step or 0) + 1
-                                            await SessionStore.update_session(db, session_id, current_step=new_step)
-                                            await websocket.send_json({"type": "step.update", "step": new_step})
-                                            logger.info(f"[{session_id}] Step advanced to {new_step}")
+                            if user_buf.strip() and is_explicit_mark_request(user_buf) and not turn_flags["highlight_called"] and not turn_flags["retry_sent"]:
+                                turn_flags["retry_sent"] = True
+                                logger.info(f"[{session_id}] Retrying explicit mark request without tool call")
+                                await gemini_ws.send(json.dumps({
+                                    "clientContent": {
+                                        "turns": [{
+                                            "role": "user",
+                                            "parts": [{
+                                                "text": (
+                                                    f'[TOOL_RETRY] The user explicitly asked you to mark something: "{user_buf.strip()}". '
+                                                    "You answered without calling highlight. Retry now. Call highlight first. "
+                                                    'Use feature_id="runtime:auto" with a target_hint from the user request if needed. '
+                                                    "After the tool returns, answer in one short sentence."
+                                                )
+                                            }]
+                                        }],
+                                        "turnComplete": True,
+                                    }
+                                }))
                             user_buf = ""
                             asst_buf = ""
+                            turn_flags = {
+                                "user_requested_highlight": False,
+                                "tool_guidance_sent": False,
+                                "highlight_called": False,
+                                "retry_sent": False,
+                            }
 
                     except Exception as e:
                         logger.error(f"[{session_id}] Gemini msg err: {e}")
@@ -394,6 +544,7 @@ async def ws_session(websocket: WebSocket):
                 elif t == "video":
                     frame_count += 1
                     raw_b64 = msg["data"]
+                    set_latest_frame(session_id, raw_b64)
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": raw_b64}]}
                     }))
@@ -422,6 +573,7 @@ async def ws_session(websocket: WebSocket):
                                         logger.info(f"[{_snap_sid}] perception failed, skipping nudge")
                                         await _ws_send({"type": "vision.perception", "status": "failed", "diff": round(_snap_diff, 1)})
                                         return
+                                    set_last_perception(_snap_sid, obs)
                                     sig = observation_signature(obs)
                                     confidence = float(obs.get("confidence", 0) or 0)
                                     changes = obs.get("changed_vs_prior", []) or []
@@ -455,17 +607,60 @@ async def ws_session(websocket: WebSocket):
 
                                     # Build step context if a manual is active
                                     step_context = ""
+                                    current_step = 0
                                     async with AsyncSessionLocal() as db:
                                         sess = await SessionStore.get_session(db, _snap_sid)
                                         if sess and sess.active_manual_id:
                                             manual = await get_manual_by_id(db, sess.active_manual_id)
                                             if manual:
+                                                sync_manual_bundle(_snap_sid, manual)
                                                 step_num = sess.current_step or 0
+                                                current_step = step_num
                                                 teardown = manual.get("teardown", {})
                                                 steps_list = teardown.get("steps", []) if isinstance(teardown, dict) else []
                                                 if steps_list and step_num < len(steps_list):
                                                     current = steps_list[step_num]
                                                     step_context = f" Current manual step ({step_num+1}/{len(steps_list)}): {current.get('title','')} — {current.get('instruction','')}"
+                                                completion_status, checks = evaluate_step_completion(_snap_sid, step_num, obs)
+                                                if completion_status == "verified":
+                                                    new_step = step_num + 1
+                                                    await SessionStore.update_session(db, _snap_sid, current_step=new_step)
+                                                    clear_pending_confirmation(_snap_sid)
+                                                    current_step = new_step
+                                                    await _ws_send({"type": "step.update", "step": new_step})
+                                                    await _ws_send(build_hud_snapshot(_snap_sid, current_step_index=new_step))
+                                                    await gemini_ws.send(json.dumps({
+                                                        "clientContent": {
+                                                            "turns": [{
+                                                                "role": "user",
+                                                                "parts": [{
+                                                                    "text": (
+                                                                        f"[STEP_VERIFIED] Manual step {step_num + 1} is visually verified complete. "
+                                                                        "Briefly guide the user to the next step. If a precise visual marker would help, call highlight before speaking."
+                                                                    )
+                                                                }]
+                                                            }],
+                                                            "turnComplete": True,
+                                                        }
+                                                    }))
+                                                elif completion_status == "ambiguous":
+                                                    if maybe_track_pending_confirmation(_snap_sid, step_num, checks):
+                                                        follow_up = get_pending_confirmation_prompt(_snap_sid) or "Show me that area clearly so I can confirm the step."
+                                                        await _ws_send(build_hud_snapshot(_snap_sid, current_step_index=step_num))
+                                                        await gemini_ws.send(json.dumps({
+                                                            "clientContent": {
+                                                                "turns": [{
+                                                                    "role": "user",
+                                                                    "parts": [{
+                                                                        "text": (
+                                                                            f"[STEP_CHECK_AMBIGUOUS] The current manual step may be complete, but visual verification is inconclusive. "
+                                                                            f"Ask the user one short confirmation question. Preferred prompt: {follow_up}"
+                                                                        )
+                                                                    }]
+                                                                }],
+                                                                "turnComplete": True,
+                                                            }
+                                                        }))
 
                                     obs_summary = json.dumps({
                                         "device_state": obs.get("device_state", ""),
@@ -503,6 +698,7 @@ async def ws_session(websocket: WebSocket):
                                         "confidence": confidence, "device_state": obs.get("device_state", ""),
                                         "changes": changes, "safety_concern": safety, "diff": round(_snap_diff, 1),
                                     })
+                                    await _ws_send(build_hud_snapshot(_snap_sid, current_step_index=current_step))
                                 except Exception as e:
                                     logger.error(f"[{_snap_sid}] perception task error: {e}")
 
@@ -586,11 +782,13 @@ async def ws_session(websocket: WebSocket):
         logger.info(f"[{session_id}] Cleaned up (frames={frame_count})")
         if intentional_end and session_id:
             _clear_perception_state(session_id)
+            clear_runtime(session_id)
 
 
 async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
     calls = tc.get("functionCalls", [])
     responses = []
+    highlight_called = False
     for call in calls:
         fn = call.get("name")
         fid = call.get("id")
@@ -603,17 +801,44 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
             async with AsyncSessionLocal() as db:
                 result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
                 if result.get("selected_manual_id"):
-                    await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
+                    await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""), current_step=0)
+                    manual = await get_manual_by_id(db, result["selected_manual_id"])
+                    sync_manual_bundle(session_id, manual)
                 else:
                     # No manual found — short instruction for Gemini
                     result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training and Google Search."
+                    sync_manual_bundle(session_id, None)
+        elif fn == "highlight":
+            highlight_called = True
+            async with AsyncSessionLocal() as db:
+                sess = await SessionStore.get_session(db, session_id)
+                if sess:
+                    args["current_step"] = sess.current_step or 0
+                result = await run_highlight_tool(db, session_id, args)
         else:
             result = {"error": f"Unknown tool: {fn}"}
 
         responses.append({"id": fid, "name": fn, "response": result})
 
         # Send different UI status based on whether manual was found
-        if result.get("selected_manual_id"):
+        if fn == "highlight":
+            async with AsyncSessionLocal() as db:
+                sess = await SessionStore.get_session(db, session_id)
+                current_step = sess.current_step or 0 if sess else 0
+            attempts = result.get("attempts") or []
+            summary = result.get("status", "")
+            if attempts and result.get("status") in {"placed", "approximate"}:
+                summary = f"{result.get('status')} ({len(attempts)} attempt{'s' if len(attempts) != 1 else ''})"
+            await client_ws.send_json({
+                "type": "tool.status", "tool": fn, "status": "done",
+                "result_summary": summary,
+                "manual_id": None,
+                "warnings": [],
+                "steps": [],
+                "follow_up_prompt": result.get("follow_up_prompt"),
+            })
+            await send_hud_state(client_ws, session_id, current_step=current_step)
+        elif result.get("selected_manual_id"):
             await client_ws.send_json({
                 "type": "tool.status", "tool": fn, "status": "done",
                 "result_summary": result.get("manual_summary", ""),
@@ -621,6 +846,8 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
                 "warnings": result.get("warnings", []),
                 "steps": result.get("troubleshooting_steps", [])[:5],
             })
+            await send_hud_state(client_ws, session_id, current_step=0)
+            await emit_step_highlight_if_needed(gemini_ws, client_ws, session_id, 0)
         else:
             await client_ws.send_json({
                 "type": "tool.status", "tool": fn, "status": "done",
@@ -629,11 +856,13 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
                 "warnings": [],
                 "steps": [],
             })
+            await send_hud_state(client_ws, session_id, current_step=0)
 
     await gemini_ws.send(json.dumps({
         "toolResponse": {"functionResponses": [{"id": r["id"], "name": r["name"], "response": r["response"]} for r in responses]}
     }))
     logger.info(f"[{session_id}] Tool response → Gemini")
+    return {"highlight_called": highlight_called}
 
 
 if __name__ == "__main__":

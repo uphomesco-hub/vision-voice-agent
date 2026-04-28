@@ -31,6 +31,9 @@ export default function RepairAssistant() {
   const [visionStatus, setVisionStatus] = useState(null);
   const [searchQueries, setSearchQueries] = useState([]);
   const [mobileCardIndex, setMobileCardIndex] = useState(0);
+  const [hudMarkers, setHudMarkers] = useState([]);
+  const [hudFeatureCatalog, setHudFeatureCatalog] = useState([]);
+  const [currentStepTarget, setCurrentStepTarget] = useState(null);
 
   const wsRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -54,6 +57,13 @@ export default function RepairAssistant() {
   const hasBackendConfig = Boolean(BACKEND_URL);
 
   useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcript]);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const now = Date.now();
+      setHudMarkers(prev => prev.filter(marker => !marker.expires_at || new Date(marker.expires_at).getTime() > now));
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
@@ -97,6 +107,9 @@ export default function RepairAssistant() {
       } else if (msg.type === 'session.state') {
         log('SESSION', 'Resumed state'); const d = msg.data;
         if (d.active_manual_id) setActiveManual({ id: d.active_manual_id, summary: `${d.active_device_model || ''} manual` });
+        setHudMarkers(d.hud_markers || []);
+        setHudFeatureCatalog(d.hud_feature_catalog || []);
+        setCurrentStepTarget(d.current_step_target || null);
       } else if (msg.type === 'status') { log('STATUS', msg.message); setStatus(msg.message);
       } else if (msg.type === 'assistant.state') {
         log('STATE', msg.state);
@@ -120,19 +133,38 @@ export default function RepairAssistant() {
         setTranscript(p => { if (!p.length) return p; return [...p.slice(0, -1), { ...p[p.length - 1], final: true }]; });
       } else if (msg.type === 'interrupted') { audioQueueRef.current = []; setVoiceState('listening'); setStatus('Listening...');
       } else if (msg.type === 'tool.status') {
-        if (msg.status === 'running') { log('TOOL', `${msg.tool} running`, msg.args); setToolActivity({ tool: msg.tool, status: 'running', detail: `Looking up: ${msg.args?.brand || ''} ${msg.args?.model || ''}`.trim() || 'Searching...' }); setVoiceState('thinking'); setStatus(`Running ${msg.tool}...`);
+        if (msg.status === 'running') {
+          log('TOOL', `${msg.tool} running`, msg.args);
+          const detail = msg.tool === 'lookup_manual'
+            ? (`Looking up: ${msg.args?.brand || ''} ${msg.args?.model || ''}`.trim() || 'Searching...')
+            : msg.tool === 'highlight'
+              ? 'Placing HUD marker...'
+              : `Running ${msg.tool}...`;
+          setToolActivity({ tool: msg.tool, status: 'running', detail }); setVoiceState('thinking'); setStatus(`Running ${msg.tool}...`);
         } else if (msg.status === 'done') { log('TOOL', `${msg.tool} done:`, msg.result_summary);
           if (msg.tool === 'google_search') { setSearchQueries(msg.queries || []); setToolActivity({ tool: msg.tool, status: 'done', detail: `Searched: ${(msg.queries || []).join(', ')}` }); log('SEARCH', msg.queries);
-          } else { if (msg.manual_id) { setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary }); setActiveManual({ id: msg.manual_id, summary: msg.result_summary }); log('MANUAL', msg.result_summary);
-          } else { setToolActivity({ tool: msg.tool, status: 'done', detail: 'No manual in database — using AI knowledge' }); setActiveManual(null); log('MANUAL', 'No manual found'); }
-          if (msg.warnings?.length) { setWarnings(msg.warnings); log('WARN', `${msg.warnings.length} warnings`); }
-          if (msg.steps?.length) { setSteps(msg.steps); log('STEPS', `${msg.steps.length} steps`); } }
+          } else if (msg.tool === 'highlight') {
+            const detail = msg.result_summary === 'cleared'
+              ? 'Cleared HUD marker'
+              : msg.follow_up_prompt || (msg.result_summary ? `HUD: ${msg.result_summary}` : 'Updated HUD marker');
+            setToolActivity({ tool: msg.tool, status: 'done', detail });
+          } else {
+            if (msg.manual_id) { setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary }); setActiveManual({ id: msg.manual_id, summary: msg.result_summary }); log('MANUAL', msg.result_summary);
+            } else { setToolActivity({ tool: msg.tool, status: 'done', detail: 'No manual in database — using AI knowledge' }); setActiveManual(null); log('MANUAL', 'No manual found'); }
+            if (msg.warnings?.length) { setWarnings(msg.warnings); log('WARN', `${msg.warnings.length} warnings`); }
+            if (msg.steps?.length) { setSteps(msg.steps); log('STEPS', `${msg.steps.length} steps`); }
+          }
           setTimeout(() => setToolActivity(null), 4000);
         }
       } else if (msg.type === 'error') { log('ERROR', msg.message); if (msg.message.includes('disconnected')) setStatus('Reconnecting...'); else setStatus('Error: ' + msg.message);
       } else if (msg.type === 'vision.status') { log('VISION', msg.status); setVisionStatus(msg.status === 'analyzing' ? 'Analyzing...' : null); if (msg.status === 'analyzing') setTimeout(() => setVisionStatus(null), 3000);
       } else if (msg.type === 'step.update') { log('STEP', `→ step ${msg.step}`);
       } else if (msg.type === 'vision.perception') { log('PERCEPTION', `${msg.status} | conf=${msg.confidence ?? '-'} | diff=${msg.diff ?? '-'} | state="${msg.device_state || ''}" | changes=${JSON.stringify(msg.changes || [])}`); }
+      else if (msg.type === 'hud.state') {
+        setHudMarkers(msg.markers || []);
+        setHudFeatureCatalog(msg.feature_catalog || []);
+        setCurrentStepTarget(msg.current_step_target || null);
+      }
     } catch (e) { log('ERROR', 'Parse:', e); }
   }, [playAudioChunk]);
 
@@ -227,6 +259,7 @@ export default function RepairAssistant() {
   const endSession = () => { log('SESSION', 'Ending'); sessionActiveRef.current = false; cleanup();
     setIsConnected(false); setIsMicEnabled(false); setVoiceState('idle'); setStatus('Ready'); setTranscript([]); setSessionId(null); sessionIdRef.current = null; reconnectCountRef.current = 0;
     setActiveManual(null); setToolActivity(null); setWarnings([]); setSteps([]); setSearchQueries([]);
+    setHudMarkers([]); setHudFeatureCatalog([]); setCurrentStepTarget(null);
   };
 
   // ─── Mobile Swipe ────────────────
@@ -244,6 +277,7 @@ export default function RepairAssistant() {
 
   // ─── RENDER ──────────────────────
   const selectedPersonaData = personas.find(p => p.id === selectedPersona);
+  const visibleHudMarkers = hudMarkers.filter(marker => !marker.expires_at || new Date(marker.expires_at).getTime() > Date.now());
 
   if (!hasBackendConfig) {
     return (
@@ -345,6 +379,9 @@ export default function RepairAssistant() {
               <div className="ra-camera-container" data-testid="camera-container">
                 <video ref={videoRef} className={`ra-camera-feed ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
                 {!cameraEnabled && <div className="ra-camera-placeholder">Camera is off</div>}
+                <div className="ra-hud-overlay" data-testid="hud-overlay">
+                  {visibleHudMarkers.map(marker => <HudMarker key={marker.marker_id} marker={marker} />)}
+                </div>
                 <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
                   <div className="ra-aura-ring"></div><div className="ra-aura-ring delay-1"></div><div className="ra-aura-ring delay-2"></div>
                 </div>
@@ -352,6 +389,7 @@ export default function RepairAssistant() {
                   {voiceState === 'listening' && 'Listening...'}{voiceState === 'speaking' && 'Speaking...'}{voiceState === 'thinking' && 'Thinking...'}{voiceState === 'idle' && 'Idle'}
                 </div>
                 {visionStatus && <div className="ra-vision-status">{visionStatus}</div>}
+                {currentStepTarget && <div className="ra-hud-step-pill">{currentStepTarget.title || currentStepTarget.label || 'Current step target'}</div>}
               </div>
               {/* Controls — inside camera section so they center relative to the camera like the aura */}
               <div className="ra-controls-bar" data-testid="controls-bar">
@@ -384,6 +422,7 @@ export default function RepairAssistant() {
               {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-title">Active Manual</div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
               {warnings.length > 0 && <div className="ra-panel ra-warnings-panel" data-testid="warnings-panel"><div className="ra-panel-title">Warnings</div>{warnings.slice(0, 3).map((w, i) => <div key={i} className="ra-warning-item">{w}</div>)}</div>}
               {steps.length > 0 && <div className="ra-panel ra-steps-panel" data-testid="steps-panel"><div className="ra-panel-title">Steps</div>{steps.map((s, i) => <div key={i} className="ra-step-item"><span className="ra-step-num">{s.step || i + 1}</span><div className="ra-step-content"><div className="ra-step-title">{s.title}</div>{s.action && <div className="ra-step-action">{s.action}</div>}</div></div>)}</div>}
+              {hudFeatureCatalog.length > 0 && <div className="ra-panel ra-hud-panel" data-testid="hud-panel"><div className="ra-panel-title">HUD</div><div className="ra-tool-detail">{visibleHudMarkers.length ? `${visibleHudMarkers.length} active marker${visibleHudMarkers.length > 1 ? 's' : ''}` : 'Waiting for AI marker placement'}</div>{currentStepTarget && <div className="ra-step-action">{currentStepTarget.title}</div>}</div>}
               <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
                 <div className="ra-panel-title">Conversation</div>
                 <div className="ra-transcript-messages">{transcript.map((t, i) => <div key={i} className={`ra-message ${t.role}`}><span className="ra-message-role">{t.role === 'user' ? 'YOU' : t.role === 'system' ? 'SYS' : 'AI'}</span><span className="ra-message-content">{t.text}</span></div>)}<div ref={transcriptEndRef} /></div>
@@ -396,3 +435,45 @@ export default function RepairAssistant() {
   );
 }
 function u8ToB64(bytes) { let b = ''; for (let i = 0; i < bytes.length; i++) b += String.fromCharCode(bytes[i]); return btoa(b); }
+
+function HudMarker({ marker }) {
+  const geometry = marker.geometry || {};
+  const type = geometry.type || 'box';
+  const classes = `ra-hud-marker ${marker.priority || 'primary'} ${marker.action_type || 'inspect'} ${marker.approximate ? 'approximate' : ''}`;
+  if (type === 'point') {
+    return (
+      <div className={`${classes} point`} style={{ left: `${(geometry.x || 0) * 100}%`, top: `${(geometry.y || 0) * 100}%` }}>
+        <div className="ra-hud-point"></div>
+        <div className="ra-hud-label">{marker.label || marker.feature_id}</div>
+      </div>
+    );
+  }
+  if (type === 'polygon') {
+    const points = (geometry.points || []).map(point => `${point.x * 100}% ${point.y * 100}%`).join(', ');
+    return (
+      <div className={`${classes} polygon`} style={{ clipPath: points ? `polygon(${points})` : undefined }}>
+        <div className="ra-hud-label floating">{marker.label || marker.feature_id}</div>
+      </div>
+    );
+  }
+  if (type === 'arrow_path') {
+    const points = geometry.points || [];
+    const start = points[0] || { x: geometry.x || 0.5, y: geometry.y || 0.5 };
+    const end = points[points.length - 1] || start;
+    const angle = Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI;
+    const length = Math.max(Math.hypot((end.x - start.x) * 100, (end.y - start.y) * 100), 6);
+    return (
+      <div className={`${classes} path`}>
+        <div className="ra-hud-line" style={{ left: `${start.x * 100}%`, top: `${start.y * 100}%`, width: `${length}%`, transform: `translateY(-50%) rotate(${angle}deg)` }}>
+          <div className="ra-hud-arrow-head"></div>
+        </div>
+        <div className="ra-hud-label" style={{ left: `${end.x * 100}%`, top: `${end.y * 100}%` }}>{marker.label || marker.feature_id}</div>
+      </div>
+    );
+  }
+  return (
+    <div className={`${classes} box`} style={{ left: `${(geometry.x || 0) * 100}%`, top: `${(geometry.y || 0) * 100}%`, width: `${(geometry.width || 0.2) * 100}%`, height: `${(geometry.height || 0.2) * 100}%` }}>
+      <div className="ra-hud-label">{marker.label || marker.feature_id}</div>
+    </div>
+  );
+}

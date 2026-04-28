@@ -216,6 +216,52 @@
 .ra-camera-container { position: relative; flex: 1; min-height: 0; }
 .ra-camera-feed { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 .ra-camera-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; }
+.ra-hud-overlay {
+  position: absolute; inset: 0; pointer-events: none; overflow: hidden;
+  transform: scaleX(-1); transform-origin: center;
+}
+.ra-hud-step-pill {
+  position: absolute; top: 10px; left: 10px; max-width: min(60%, 420px);
+  background: rgba(0,0,0,0.62); backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 999px;
+  padding: 5px 10px; font-size: 10px; font-weight: 600; color: var(--text-2);
+}
+.ra-hud-marker { position: absolute; }
+.ra-hud-marker.primary { --hud-color: #52e5d8; }
+.ra-hud-marker.secondary { --hud-color: #ffb84d; }
+.ra-hud-marker.danger, .ra-hud-marker.avoid { --hud-color: #ff6b6b; }
+.ra-hud-marker.box {
+  border: 2px solid var(--hud-color);
+  border-radius: 14px; box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 0 24px color-mix(in srgb, var(--hud-color) 30%, transparent);
+  background: color-mix(in srgb, var(--hud-color) 10%, transparent);
+}
+.ra-hud-marker.approximate.box { border-style: dashed; }
+.ra-hud-marker.point { transform: translate(-50%, -50%); }
+.ra-hud-point {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--hud-color); box-shadow: 0 0 0 6px color-mix(in srgb, var(--hud-color) 18%, transparent);
+  background: rgba(0,0,0,0.25);
+}
+.ra-hud-marker.polygon {
+  inset: 0; border: 2px solid color-mix(in srgb, var(--hud-color) 85%, white 5%);
+  background: color-mix(in srgb, var(--hud-color) 16%, transparent);
+}
+.ra-hud-marker.path { inset: 0; }
+.ra-hud-line {
+  position: absolute; height: 2px; background: var(--hud-color);
+  transform-origin: left center; box-shadow: 0 0 12px color-mix(in srgb, var(--hud-color) 40%, transparent);
+}
+.ra-hud-arrow-head {
+  position: absolute; right: -1px; top: 50%; transform: translateY(-50%) rotate(45deg);
+  width: 10px; height: 10px; border-top: 2px solid var(--hud-color); border-right: 2px solid var(--hud-color);
+}
+.ra-hud-label {
+  position: absolute; top: -10px; left: 0; transform: translateY(-100%) scaleX(-1);
+  background: rgba(8,8,8,0.88); border: 1px solid rgba(255,255,255,0.08); border-radius: 999px;
+  padding: 4px 8px; font-size: 10px; font-weight: 600; white-space: nowrap; color: var(--text);
+}
+.ra-hud-label.floating { top: 12px; left: 12px; transform: scaleX(-1); }
+.ra-hud-panel { background: rgba(255,255,255,0.015); }
 
 .ra-voice-aura { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); width: 56px; height: 56px; pointer-events: none; }
 .ra-aura-ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.25); opacity: 0; }
@@ -315,4 +361,5 @@
   .ra-control-label { display: none; }
   .ra-control-btn-text { width: 44px; padding: 0; border-radius: 50%; }
   .ra-control-btn-flip { display: flex; }
+  .ra-hud-step-pill { max-width: calc(100% - 70px); font-size: 9px; }
 }

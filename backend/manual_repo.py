@@ -8,6 +8,8 @@ import json
 import logging
 import os
 
+from hud_runtime import build_manual_hud_bundle
+
 logger = logging.getLogger(__name__)
 
 MANUALS_DIR = os.path.join(os.path.dirname(__file__), "manuals")
@@ -143,7 +145,9 @@ async def get_manual_by_id(db: AsyncSession, manual_id: str) -> Optional[Dict[st
     m = result.scalar_one_or_none()
     if not m:
         return None
-    return {"manual_id": m.id, "brand": m.brand, "model": m.model, "device_type": m.device_type, "title": m.title, **m.json_data}
+    manual = {"manual_id": m.id, "brand": m.brand, "model": m.model, "device_type": m.device_type, "title": m.title, **m.json_data}
+    manual.update(build_manual_hud_bundle(manual))
+    return manual
 
 
 async def lookup_manual_tool(
@@ -189,6 +193,15 @@ async def lookup_manual_tool(
             "hidden_clips": selected.get("hidden_clips", {}) if selected else {},
             "alternatives": [{"manual_id": r["manual_id"], "title": r["title"], "score": r["score"]} for r in results[1:3]],
         }
+        if selected:
+            manual = await get_manual_by_id(db, selected["manual_id"])
+            output["hud_features"] = manual.get("hud_features", [])
+            output["step_targets"] = manual.get("step_targets", [])
+            output["completion_checks"] = manual.get("completion_checks", {})
+        else:
+            output["hud_features"] = []
+            output["step_targets"] = []
+            output["completion_checks"] = {}
         tool_run.output_data = output
         tool_run.status = "success"
         tool_run.completed_at = datetime.now(timezone.utc)
