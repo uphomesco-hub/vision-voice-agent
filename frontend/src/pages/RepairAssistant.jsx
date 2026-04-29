@@ -13,8 +13,16 @@ function log(cat, ...args) {
 export default function RepairAssistant() {
   const [personas, setPersonas] = useState([]);
   const [voices, setVoices] = useState([]);
+  const [modelProviders, setModelProviders] = useState([]);
   const [selectedPersona, setSelectedPersona] = useState('calm-expert');
   const [selectedVoice, setSelectedVoice] = useState('Puck');
+  const [selectedProvider, setSelectedProvider] = useState('gemini_live');
+  const [modelApiBase, setModelApiBase] = useState('');
+  const [modelApiKey, setModelApiKey] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [visionModelId, setVisionModelId] = useState('');
+  const [providerState, setProviderState] = useState(null);
+  const [textPrompt, setTextPrompt] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isMicEnabled, setIsMicEnabled] = useState(false);
   const [voiceState, setVoiceState] = useState('idle');
@@ -69,8 +77,22 @@ export default function RepairAssistant() {
 
   const loadData = useCallback(async () => {
     try {
-      const [p, v] = await Promise.all([fetch(`${API}/personas`).then(r => r.json()), fetch(`${API}/voices`).then(r => r.json())]);
-      setPersonas(p); setVoices(v); log('DATA', `${p.length} personas, ${v.length} voices`);
+      const [p, v, m] = await Promise.all([
+        fetch(`${API}/personas`).then(r => r.json()),
+        fetch(`${API}/voices`).then(r => r.json()),
+        fetch(`${API}/model-providers`).then(r => r.json()).catch(() => null),
+      ]);
+      setPersonas(p); setVoices(v);
+      if (m?.providers?.length) {
+        setModelProviders(m.providers);
+        const defaultProvider = m.default_provider || m.providers[0].id;
+        setSelectedProvider(defaultProvider);
+        const active = m.providers.find(provider => provider.id === defaultProvider) || m.providers[0];
+        setModelApiBase(active.default_api_base || '');
+        setModelId(active.default_model || '');
+        setVisionModelId(active.default_model || '');
+      }
+      log('DATA', `${p.length} personas, ${v.length} voices, ${m?.providers?.length || 0} model providers`);
     } catch (e) { setStatus('Error loading'); }
   }, []);
 
@@ -120,6 +142,9 @@ export default function RepairAssistant() {
         if (msg.state === 'listening') setVoiceState('listening');
         else if (msg.state === 'connecting') setVoiceState('thinking');
         else if (msg.state === 'speaking') setVoiceState('speaking');
+      } else if (msg.type === 'provider.state') {
+        setProviderState(msg);
+        log('PROVIDER', `${msg.provider} ${msg.model_id || ''}`);
       } else if (msg.type === 'audio') { setVoiceState('speaking'); setStatus('Speaking...'); playAudioChunk(msg.data);
       } else if (msg.type === 'transcription') {
         let text = msg.text;
@@ -187,7 +212,16 @@ export default function RepairAssistant() {
       log('WS', 'Connecting...'); const ws = new WebSocket(`${WS_BASE}/api/ws/session`); wsRef.current = ws;
       const t = setTimeout(() => reject(new Error('Timeout')), 10000);
       ws.onopen = () => { clearTimeout(t); log('WS', 'Open'); const cfg = configRef.current;
-        const m = { type: 'config', persona_id: cfg.persona_id, voice_id: cfg.voice_id };
+        const m = {
+          type: 'config',
+          persona_id: cfg.persona_id,
+          voice_id: cfg.voice_id,
+          model_provider: cfg.model_provider,
+          model_api_base: cfg.model_api_base,
+          model_api_key: cfg.model_api_key,
+          model_id: cfg.model_id,
+          vision_model_id: cfg.vision_model_id,
+        };
         if (sessionIdRef.current) { m.resume_session_id = sessionIdRef.current; log('WS', `Resume ${sessionIdRef.current}`); }
         ws.send(JSON.stringify(m));
         if (heartbeatRef.current) clearInterval(heartbeatRef.current);
@@ -260,19 +294,48 @@ export default function RepairAssistant() {
     else { await startCamera(); log('CAM', 'Toggled ON'); }
   };
 
+  const selectProvider = (providerId) => {
+    setSelectedProvider(providerId);
+    const provider = modelProviders.find(item => item.id === providerId);
+    setModelApiBase(provider?.default_api_base || '');
+    setModelId(provider?.default_model || '');
+    setVisionModelId(provider?.default_model || '');
+    setModelApiKey('');
+  };
+
+  const selectedProviderData = modelProviders.find(provider => provider.id === selectedProvider);
+  const providerUsesLiveAudio = selectedProvider === 'gemini_live';
+  const sendTextPrompt = () => {
+    const content = textPrompt.trim();
+    if (!content || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'text', content }));
+    setTextPrompt('');
+  };
+
   const startSession = async () => {
     if (!hasBackendConfig) {
       setStatus('Backend URL missing');
       return;
     }
-    try { log('SESSION', 'Starting...'); setStatus('Connecting...'); configRef.current = { persona_id: selectedPersona, voice_id: selectedVoice }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
-      await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 1500)); await startMic(); await startCamera(); setVoiceState('listening'); setStatus('Listening...'); setTranscript([{ role: 'system', text: 'Session started — speak and show your device!', final: true }]); log('SESSION', 'Active');
+    try { log('SESSION', 'Starting...'); setStatus('Connecting...'); configRef.current = {
+        persona_id: selectedPersona,
+        voice_id: selectedVoice,
+        model_provider: selectedProvider,
+        model_api_base: modelApiBase,
+        model_api_key: modelApiKey,
+        model_id: modelId,
+        vision_model_id: visionModelId,
+      }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
+      await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 800));
+      if (providerUsesLiveAudio) await startMic();
+      await startCamera(); setVoiceState('listening'); setStatus(providerUsesLiveAudio ? 'Listening...' : 'Type a message...');
+      setTranscript([{ role: 'system', text: providerUsesLiveAudio ? 'Session started — speak and show your device!' : 'Session started — type a message and show your device.', final: true }]); log('SESSION', 'Active');
     } catch (e) { sessionActiveRef.current = false; setStatus('Error: ' + e.message); stopMic(); stopCamera(); wsRef.current?.close(); wsRef.current = null; }
   };
   const endSession = () => { log('SESSION', 'Ending'); sessionActiveRef.current = false; cleanup();
     setIsConnected(false); setIsMicEnabled(false); setVoiceState('idle'); setStatus('Ready'); setTranscript([]); setSessionId(null); sessionIdRef.current = null; reconnectCountRef.current = 0;
     setActiveManual(null); setToolActivity(null); setWarnings([]); setSteps([]); setSearchQueries([]);
-    setHudMarkers([]); setHudFeatureCatalog([]); setCurrentStepTarget(null); setHudPrompt(null); setHudMarkerHistory([]);
+    setHudMarkers([]); setHudFeatureCatalog([]); setCurrentStepTarget(null); setHudPrompt(null); setHudMarkerHistory([]); setProviderState(null); setTextPrompt('');
   };
 
   // ─── Mobile Swipe ────────────────
@@ -317,6 +380,7 @@ export default function RepairAssistant() {
         </div>
         <div className="ra-header-center"><h1 className="ra-app-title">Repair Assistant</h1></div>
         <div className="ra-header-right">
+          {providerState && <span className="ra-mode-badge">{providerState.provider} · {providerState.model_id}</span>}
           {sessionId && <span className="ra-session-id" data-testid="session-id">{sessionId.slice(0, 8)}</span>}
         </div>
       </header>
@@ -378,6 +442,34 @@ export default function RepairAssistant() {
               </div>
             </section>
 
+            <section className="ra-model-section">
+              <h2 className="ra-section-heading">Model</h2>
+              <div className="ra-model-grid">
+                <label className="ra-model-field">
+                  <span>Provider</span>
+                  <select value={selectedProvider} onChange={e => selectProvider(e.target.value)}>
+                    {modelProviders.map(provider => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+                  </select>
+                </label>
+                <label className="ra-model-field">
+                  <span>API Base</span>
+                  <input value={modelApiBase} onChange={e => setModelApiBase(e.target.value)} placeholder={selectedProviderData?.default_api_base || 'Provider default'} disabled={selectedProvider === 'gemini_live'} />
+                </label>
+                <label className="ra-model-field">
+                  <span>API Key</span>
+                  <input type="password" value={modelApiKey} onChange={e => setModelApiKey(e.target.value)} placeholder={selectedProvider === 'ollama' ? 'Optional' : 'Optional override'} />
+                </label>
+                <label className="ra-model-field">
+                  <span>Model</span>
+                  <input value={modelId} onChange={e => setModelId(e.target.value)} placeholder={selectedProviderData?.default_model || 'model'} />
+                </label>
+                {selectedProvider !== 'gemini_live' && <label className="ra-model-field">
+                  <span>Vision Model</span>
+                  <input value={visionModelId} onChange={e => setVisionModelId(e.target.value)} placeholder={modelId || 'vision model'} />
+                </label>}
+              </div>
+            </section>
+
             <div className="ra-init-section">
               <button className="ra-btn-init" onClick={startSession} data-testid="start-session-button">
                 Initialize Session
@@ -412,7 +504,7 @@ export default function RepairAssistant() {
                   <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
                 </button>
                 <div className="ra-controls-center">
-                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected} data-testid="mic-button">
+                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected || !providerUsesLiveAudio} data-testid="mic-button">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                   </button>
                   <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
@@ -429,6 +521,10 @@ export default function RepairAssistant() {
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/><path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/><polyline points="16 3 19 6 16 9"/><polyline points="8 15 5 18 8 21"/></svg>
                   </button>
                 </div>
+              </div>
+              <div className="ra-text-composer">
+                <input value={textPrompt} onChange={e => setTextPrompt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') sendTextPrompt(); }} placeholder={providerUsesLiveAudio ? 'Type instead of speaking' : 'Ask this model'} />
+                <button onClick={sendTextPrompt} disabled={!textPrompt.trim()}>Send</button>
               </div>
             </div>
             {showTranscript && <div className="ra-info-section">

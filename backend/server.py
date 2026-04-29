@@ -18,6 +18,15 @@ from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
 from personas import get_personas, get_voices
 from session_store import SessionStore
 from manual_repo import seed_manuals, lookup_manual_tool, get_manual_by_id
+from model_router import (
+    call_model_once,
+    extract_tool_call,
+    get_provider_profiles,
+    provider_capabilities,
+    public_provider_state,
+    resolve_model_provider_config,
+    strip_tool_json,
+)
 from hud_runtime import (
     build_hud_snapshot,
     clear_pending_confirmation,
@@ -48,10 +57,8 @@ logger = logging.getLogger(__name__)
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
-GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
 MODEL_ID = "gemini-2.5-flash-native-audio-latest"
 INPUT_SAMPLE_RATE = 16000
-GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
@@ -223,6 +230,233 @@ def is_explicit_mark_request(text: str) -> bool:
     ]
     return any(re.search(pattern, normalized) for pattern in patterns)
 
+
+def build_http_model_system_prompt(base_prompt: str) -> str:
+    return (
+        f"{base_prompt}\n\n"
+        "PROVIDER MODE: You are running through a generic text/vision model adapter, not Gemini Live. "
+        "Keep replies concise and practical for a live repair session. If an image is included, use it as the current camera frame. "
+        "If no image is included, do not claim you can see the scene.\n\n"
+        "TOOL CALLS: If you need a backend tool, return strict JSON with this exact shape and no markdown:\n"
+        '{"tool_call":{"name":"lookup_manual","args":{"brand":"","model":"","device_type":"","issue":"","query":""}}}\n'
+        "or\n"
+        '{"tool_call":{"name":"highlight","args":{"operation":"create","feature_id":"runtime:auto","target_hint":"target to mark","action_type":"inspect","reason":"user_request"}}}\n'
+        "Use highlight before answering direct user requests to mark, circle, point at, or show which visual target they mean."
+    )
+
+
+async def execute_provider_tool_call(session_id: str, client_ws: WebSocket, tool: Dict[str, Any]) -> Dict[str, Any]:
+    fn = tool.get("name")
+    args = tool.get("args") or {}
+    logger.info(f"[{session_id}] Provider tool: {fn}({json.dumps(args)[:100]})")
+    await client_ws.send_json({"type": "tool.status", "tool": fn, "status": "running", "args": args})
+
+    if fn == "lookup_manual":
+        async with AsyncSessionLocal() as db:
+            result = await lookup_manual_tool(
+                db,
+                session_id,
+                brand=args.get("brand", ""),
+                model=args.get("model", ""),
+                device_type=args.get("device_type", ""),
+                issue=args.get("issue", ""),
+                query=args.get("query", ""),
+            )
+            if result.get("selected_manual_id"):
+                await SessionStore.update_session(
+                    db,
+                    session_id,
+                    active_manual_id=result["selected_manual_id"],
+                    active_device_type=args.get("device_type", ""),
+                    active_device_model=args.get("model", ""),
+                    current_step=0,
+                )
+                manual = await get_manual_by_id(db, result["selected_manual_id"])
+                sync_manual_bundle(session_id, manual)
+                await client_ws.send_json({
+                    "type": "tool.status",
+                    "tool": fn,
+                    "status": "done",
+                    "result_summary": result.get("manual_summary", ""),
+                    "manual_id": result.get("selected_manual_id"),
+                    "warnings": result.get("warnings", []),
+                    "steps": result.get("troubleshooting_steps", [])[:5],
+                })
+                await send_hud_state(client_ws, session_id, current_step=0)
+                return {"name": fn, "result": result, "highlight_called": False}
+            sync_manual_bundle(session_id, None)
+            await client_ws.send_json({
+                "type": "tool.status",
+                "tool": fn,
+                "status": "done",
+                "result_summary": "No manual found — using general knowledge",
+                "manual_id": None,
+                "warnings": [],
+                "steps": [],
+            })
+            return {"name": fn, "result": result, "highlight_called": False}
+
+    if fn == "highlight":
+        async with AsyncSessionLocal() as db:
+            sess = await SessionStore.get_session(db, session_id)
+            if sess:
+                args["current_step"] = sess.current_step or 0
+            result = await run_highlight_tool(db, session_id, args)
+        async with AsyncSessionLocal() as db:
+            sess = await SessionStore.get_session(db, session_id)
+            current_step = sess.current_step or 0 if sess else 0
+        attempts = result.get("attempts") or []
+        summary = result.get("status", "")
+        if attempts and result.get("status") in {"placed", "approximate"}:
+            summary = f"{result.get('status')} ({len(attempts)} attempt{'s' if len(attempts) != 1 else ''})"
+        await client_ws.send_json({
+            "type": "tool.status",
+            "tool": fn,
+            "status": "done",
+            "result_summary": summary,
+            "manual_id": None,
+            "warnings": [],
+            "steps": [],
+            "follow_up_prompt": result.get("follow_up_prompt"),
+        })
+        await send_hud_state(client_ws, session_id, current_step=current_step)
+        return {"name": fn, "result": result, "highlight_called": True}
+
+    result = {"error": f"Unknown tool: {fn}"}
+    await client_ws.send_json({
+        "type": "tool.status",
+        "tool": fn or "unknown",
+        "status": "done",
+        "result_summary": result["error"],
+        "manual_id": None,
+        "warnings": [],
+        "steps": [],
+    })
+    return {"name": fn, "result": result, "highlight_called": False}
+
+
+async def run_http_model_session(
+    websocket: WebSocket,
+    session_id: str,
+    provider_config,
+    full_prompt: str,
+    resume_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    frame_count = 0
+    intentional_end = False
+    audio_notice_sent = False
+    model_prompt = build_http_model_system_prompt(full_prompt)
+
+    await websocket.send_json({"type": "provider.state", **public_provider_state(provider_config)})
+    await websocket.send_json({"type": "assistant.state", "state": "listening"})
+    await websocket.send_json({"type": "status", "message": f"Connected to {provider_config.provider}. Type a message to use this model."})
+    await send_hud_state(websocket, session_id, current_step=0)
+
+    if resume_id:
+        async with AsyncSessionLocal() as db:
+            state = await SessionStore.get_session_state(db, session_id)
+            if state:
+                snapshot = build_hud_snapshot(session_id, current_step_index=state.get("current_step", 0))
+                state.update({
+                    "hud_markers": snapshot.get("markers", []),
+                    "hud_feature_catalog": snapshot.get("feature_catalog", []),
+                    "current_step_target": snapshot.get("current_step_target"),
+                })
+                await websocket.send_json({"type": "session.state", "data": state})
+
+    if not resume_id:
+        greeting = "Session started. Tell me what device or part you want help with."
+        await websocket.send_json({"type": "transcription", "role": "assistant", "text": greeting})
+        await websocket.send_json({"type": "turn_complete"})
+        async with AsyncSessionLocal() as db:
+            await SessionStore.add_turn(db, session_id, "assistant", greeting)
+
+    async def answer_user_text(user_text: str):
+        nonlocal model_prompt
+        latest_frame = get_runtime_state(session_id).get("latest_frame_b64")
+        await websocket.send_json({"type": "assistant.state", "state": "thinking"})
+        await websocket.send_json({"type": "transcription", "role": "user", "text": user_text})
+        async with AsyncSessionLocal() as db:
+            await SessionStore.add_turn(db, session_id, "user", user_text)
+
+        if is_hud_worthy_user_request(user_text):
+            await run_hud_planner_and_emit(
+                websocket,
+                session_id,
+                event="user_text",
+                user_text=user_text,
+                force=True,
+            )
+
+        try:
+            response_text = await call_model_once(provider_config, model_prompt, user_text, image_b64=latest_frame)
+            tool = extract_tool_call(response_text)
+            if tool:
+                tool_info = await execute_provider_tool_call(session_id, websocket, tool)
+                tool_result_prompt = (
+                    f"The user said: {user_text}\n\n"
+                    f"Backend tool result:\n{json.dumps(tool_info.get('result'), ensure_ascii=False)}\n\n"
+                    "Now answer the user in one or two concise sentences. Do not output tool JSON."
+                )
+                response_text = await call_model_once(provider_config, model_prompt, tool_result_prompt, image_b64=latest_frame)
+
+            assistant_text = strip_tool_json(response_text)
+            if not assistant_text:
+                assistant_text = "I ran the model, but it did not return a usable answer."
+            await websocket.send_json({"type": "assistant.state", "state": "speaking"})
+            await websocket.send_json({"type": "transcription", "role": "assistant", "text": assistant_text})
+            await websocket.send_json({"type": "turn_complete"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            async with AsyncSessionLocal() as db:
+                await SessionStore.add_turn(db, session_id, "assistant", assistant_text)
+        except Exception as exc:
+            logger.error(f"[{session_id}] Provider response error: {exc}")
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "error", "message": f"Model provider error: {exc}"})
+
+    while True:
+        try:
+            raw = await asyncio.wait_for(websocket.receive_text(), timeout=900)
+        except asyncio.TimeoutError:
+            await websocket.send_json({"type": "error", "message": "Session timeout (15 min idle)"})
+            break
+
+        msg = json.loads(raw)
+        t = msg.get("type")
+        if t == "heartbeat":
+            await websocket.send_json({"type": "heartbeat"})
+        elif t == "end":
+            intentional_end = True
+            logger.info(f"[{session_id}] Client ended provider session intentionally")
+            break
+        elif t == "video":
+            frame_count += 1
+            raw_b64 = msg.get("data", "")
+            set_latest_frame(session_id, raw_b64)
+            if frame_count % 2 == 0:
+                try:
+                    result = await refresh_tracked_markers(session_id)
+                    if result.get("updated", 0) > 0:
+                        async with AsyncSessionLocal() as db:
+                            sess = await SessionStore.get_session(db, session_id)
+                            step = sess.current_step or 0 if sess else 0
+                        await websocket.send_json(build_hud_snapshot(session_id, current_step_index=step))
+                except Exception as exc:
+                    logger.error(f"[{session_id}] HUD tracking error: {exc}")
+        elif t == "audio":
+            if not audio_notice_sent:
+                audio_notice_sent = True
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "This provider does not support live audio yet. Use the text box for this model.",
+                })
+        elif t == "text":
+            txt = (msg.get("content") or "").strip()
+            if txt:
+                await answer_user_text(txt)
+
+    return {"intentional_end": intentional_end, "frame_count": frame_count}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Server starting — init DB...")
@@ -241,7 +475,21 @@ api = APIRouter(prefix="/api")
 
 @api.get("/health")
 async def health():
-    return {"status": "healthy", "model": MODEL_ID, "version": "2.0-step2"}
+    provider = os.getenv("ASSISTANT_PROVIDER", "gemini_live")
+    return {
+        "status": "healthy",
+        "model": MODEL_ID,
+        "version": "2.0-step2",
+        "default_provider": provider,
+        "provider_capabilities": provider_capabilities(provider),
+    }
+
+@api.get("/model-providers")
+async def list_model_providers():
+    return {
+        "default_provider": os.getenv("ASSISTANT_PROVIDER", "gemini_live"),
+        "providers": get_provider_profiles(),
+    }
 
 @api.get("/personas")
 async def list_personas():
@@ -327,6 +575,7 @@ async def ws_session(websocket: WebSocket):
         persona_id = cfg.get("persona_id", "calm-expert")
         voice_id = cfg.get("voice_id", "Puck")
         resume_id = cfg.get("resume_session_id")  # For reconnect-with-history
+        provider_config = resolve_model_provider_config(cfg)
 
         # Create or resume session
         async with AsyncSessionLocal() as db:
@@ -385,17 +634,37 @@ async def ws_session(websocket: WebSocket):
 
         full_prompt = system_prompt + history_context + active_manual_context
 
+        if provider_config.provider != "gemini_live":
+            result = await run_http_model_session(
+                websocket,
+                session_id=session_id,
+                provider_config=provider_config,
+                full_prompt=full_prompt,
+                resume_id=resume_id,
+            )
+            intentional_end = bool(result.get("intentional_end"))
+            frame_count = int(result.get("frame_count", 0) or 0)
+            return
+
+        if not provider_config.api_key:
+            await websocket.send_json({"type": "error", "message": "Gemini Live API key is missing."})
+            return
+
         # Connect to Gemini
-        logger.info(f"[{session_id}] Connecting Gemini (resume={bool(resume_id)})")
+        logger.info(f"[{session_id}] Connecting Gemini (resume={bool(resume_id)}, model={provider_config.model_id})")
+        gemini_ws_url = (
+            "wss://generativelanguage.googleapis.com/ws/"
+            f"google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={provider_config.api_key}"
+        )
         gemini_ws = await websockets.connect(
-            GEMINI_WS_URL,
+            gemini_ws_url,
             ping_interval=30, ping_timeout=60, close_timeout=5,
             max_size=16 * 1024 * 1024,
         )
 
         setup = {
             "setup": {
-                "model": f"models/{MODEL_ID}",
+                "model": f"models/{provider_config.model_id}",
                 "generation_config": {
                     "response_modalities": ["AUDIO"],
                     "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_id}}}
@@ -410,6 +679,7 @@ async def ws_session(websocket: WebSocket):
         json.loads(await asyncio.wait_for(gemini_ws.recv(), timeout=10))
         logger.info(f"[{session_id}] Gemini ready")
 
+        await websocket.send_json({"type": "provider.state", **public_provider_state(provider_config)})
         await websocket.send_json({"type": "assistant.state", "state": "listening"})
         await websocket.send_json({"type": "status", "message": "Connected! Start speaking..."})
         await send_hud_state(websocket, session_id, current_step=0)
