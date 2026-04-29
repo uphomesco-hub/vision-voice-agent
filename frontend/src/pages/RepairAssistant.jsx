@@ -55,6 +55,10 @@ export default function RepairAssistant() {
   const audioQueueRef = useRef([]);
   const isPlayingRef = useRef(false);
   const playbackCtxRef = useRef(null);
+  const speechRecognitionRef = useRef(null);
+  const browserSpeechActiveRef = useRef(false);
+  const speechOutputActiveRef = useRef(false);
+  const providerUsesLiveAudioRef = useRef(true);
   const heartbeatRef = useRef(null);
   const reconnectRef = useRef(null);
   const sessionActiveRef = useRef(false);
@@ -65,8 +69,10 @@ export default function RepairAssistant() {
   const reconnectCountRef = useRef(0);
   const touchStartRef = useRef(null);
   const hasBackendConfig = Boolean(BACKEND_URL);
+  const providerUsesLiveAudio = selectedProvider === 'gemini_live';
 
   useEffect(() => { transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [transcript]);
+  useEffect(() => { providerUsesLiveAudioRef.current = providerUsesLiveAudio; }, [providerUsesLiveAudio]);
   useEffect(() => {
     const id = window.setInterval(() => {
       const now = Date.now();
@@ -119,6 +125,110 @@ export default function RepairAssistant() {
     isPlayingRef.current = false;
   };
 
+  const sendTextContent = useCallback((content) => {
+    const text = (content || '').trim();
+    if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+    wsRef.current.send(JSON.stringify({ type: 'text', content: text }));
+    return true;
+  }, []);
+
+  const startBrowserSpeechInput = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setStatus('Browser speech recognition unavailable');
+      log('SPEECH', 'Browser SpeechRecognition unavailable');
+      return;
+    }
+    if (speechRecognitionRef.current) return;
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.onstart = () => {
+      setIsMicEnabled(true);
+      setVoiceState('listening');
+      setStatus('Listening...');
+      log('SPEECH', 'Browser STT active');
+    };
+    recognition.onresult = (event) => {
+      let finalText = '';
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0]?.transcript || '';
+        if (event.results[i].isFinal) finalText += chunk;
+        else interimText += chunk;
+      }
+      if (interimText.trim()) setStatus(`Hearing: ${interimText.trim()}`);
+      if (finalText.trim()) {
+        log('SPEECH', `Browser STT final: "${finalText.trim()}"`);
+        sendTextContent(finalText);
+      }
+    };
+    recognition.onerror = (event) => {
+      log('SPEECH', `Browser STT error: ${event.error}`);
+      if (event.error !== 'no-speech') setStatus(`Speech error: ${event.error}`);
+    };
+    recognition.onend = () => {
+      speechRecognitionRef.current = null;
+      if (browserSpeechActiveRef.current && !speechOutputActiveRef.current) {
+        window.setTimeout(() => {
+          if (browserSpeechActiveRef.current && !speechRecognitionRef.current && !speechOutputActiveRef.current) {
+            startBrowserSpeechInput();
+          }
+        }, 350);
+      } else if (!browserSpeechActiveRef.current) {
+        setIsMicEnabled(false);
+      }
+    };
+    browserSpeechActiveRef.current = true;
+    speechRecognitionRef.current = recognition;
+    recognition.start();
+  }, [sendTextContent]);
+
+  const stopBrowserSpeechInput = useCallback(() => {
+    browserSpeechActiveRef.current = false;
+    const recognition = speechRecognitionRef.current;
+    speechRecognitionRef.current = null;
+    if (recognition) {
+      try { recognition.stop(); } catch {}
+    }
+    setIsMicEnabled(false);
+    if (!providerUsesLiveAudioRef.current) setStatus('Voice input paused');
+  }, []);
+
+  const speakBrowserText = useCallback((text) => {
+    if (!text || providerUsesLiveAudioRef.current || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+    try {
+      window.speechSynthesis.cancel();
+      speechOutputActiveRef.current = true;
+      if (speechRecognitionRef.current) {
+        try { speechRecognitionRef.current.stop(); } catch {}
+      }
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      utterance.onstart = () => {
+        setVoiceState('speaking');
+        setStatus('Speaking...');
+      };
+      utterance.onend = () => {
+        speechOutputActiveRef.current = false;
+        setVoiceState(browserSpeechActiveRef.current ? 'listening' : 'idle');
+        setStatus(browserSpeechActiveRef.current ? 'Listening...' : 'Ready');
+        if (browserSpeechActiveRef.current && !speechRecognitionRef.current) startBrowserSpeechInput();
+      };
+      utterance.onerror = () => {
+        speechOutputActiveRef.current = false;
+        if (browserSpeechActiveRef.current && !speechRecognitionRef.current) startBrowserSpeechInput();
+      };
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      log('SPEECH', 'Browser TTS error:', e);
+      speechOutputActiveRef.current = false;
+    }
+  }, [startBrowserSpeechInput]);
+
   // ─── WS Message Handler ──────────
   const handleMsg = useCallback((event) => {
     try {
@@ -151,7 +261,10 @@ export default function RepairAssistant() {
         if (msg.role === 'user') {
           if (/[^\u0000-\u024F\u1E00-\u1EFF\u2000-\u206F\u2070-\u209F\u20A0-\u20CF\u2100-\u214F.,!?;:'"()\-\s\d]/.test(text)) { log('SPEECH', `User (non-English filtered): "${text}"`); return; }
           log('SPEECH', `User: "${text}"`);
-        } else { log('SPEECH', `AI: "${text}"`); }
+        } else {
+          log('SPEECH', `AI: "${text}"`);
+          speakBrowserText(text);
+        }
         setTranscript(prev => {
           const last = prev[prev.length - 1];
           if (last && last.role === msg.role && !last.final) return [...prev.slice(0, -1), { ...last, text: last.text + text }];
@@ -204,7 +317,7 @@ export default function RepairAssistant() {
         setHudMarkerHistory(msg.marker_history || []);
       }
     } catch (e) { log('ERROR', 'Parse:', e); }
-  }, [playAudioChunk]);
+  }, [playAudioChunk, speakBrowserText]);
 
   // ─── WebSocket ───────────────────
   const connectWS = useCallback(() => {
@@ -274,7 +387,7 @@ export default function RepairAssistant() {
     log('CAM', `Flipped to ${newFacing}`);
   };
   const cleanup = useCallback(() => { if (heartbeatRef.current) clearInterval(heartbeatRef.current); if (reconnectRef.current) clearTimeout(reconnectRef.current);
-    if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; }, [stopCamera, stopMic]);
+    if (wsRef.current?.readyState === WebSocket.OPEN) { wsRef.current.send(JSON.stringify({ type: 'end' })); wsRef.current.close(); } wsRef.current = null; stopMic(); stopBrowserSpeechInput(); stopCamera(); audioQueueRef.current = []; playbackCtxRef.current?.close(); playbackCtxRef.current = null; if (window.speechSynthesis) window.speechSynthesis.cancel(); speechOutputActiveRef.current = false; }, [stopBrowserSpeechInput, stopCamera, stopMic]);
 
   useEffect(() => {
     log('INIT', 'Loading...');
@@ -304,12 +417,9 @@ export default function RepairAssistant() {
   };
 
   const selectedProviderData = modelProviders.find(provider => provider.id === selectedProvider);
-  const providerUsesLiveAudio = selectedProvider === 'gemini_live';
   const sendTextPrompt = () => {
     const content = textPrompt.trim();
-    if (!content || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    wsRef.current.send(JSON.stringify({ type: 'text', content }));
-    setTextPrompt('');
+    if (sendTextContent(content)) setTextPrompt('');
   };
 
   const startSession = async () => {
@@ -328,9 +438,10 @@ export default function RepairAssistant() {
       }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
       await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 800));
       if (providerUsesLiveAudio) await startMic();
-      await startCamera(); setVoiceState('listening'); setStatus(providerUsesLiveAudio ? 'Listening...' : 'Type a message...');
-      setTranscript([{ role: 'system', text: providerUsesLiveAudio ? 'Session started — speak and show your device!' : 'Session started — type a message and show your device.', final: true }]); log('SESSION', 'Active');
-    } catch (e) { sessionActiveRef.current = false; setStatus('Error: ' + e.message); stopMic(); stopCamera(); wsRef.current?.close(); wsRef.current = null; }
+      else startBrowserSpeechInput();
+      await startCamera(); setVoiceState('listening'); setStatus(providerUsesLiveAudio ? 'Listening...' : 'Listening...');
+      setTranscript([{ role: 'system', text: providerUsesLiveAudio ? 'Session started — speak and show your device!' : 'Session started — speak or type and show your device.', final: true }]); log('SESSION', 'Active');
+    } catch (e) { sessionActiveRef.current = false; setStatus('Error: ' + e.message); stopMic(); stopBrowserSpeechInput(); stopCamera(); wsRef.current?.close(); wsRef.current = null; }
   };
   const endSession = () => { log('SESSION', 'Ending'); sessionActiveRef.current = false; cleanup();
     setIsConnected(false); setIsMicEnabled(false); setVoiceState('idle'); setStatus('Ready'); setTranscript([]); setSessionId(null); sessionIdRef.current = null; reconnectCountRef.current = 0;
@@ -504,7 +615,7 @@ export default function RepairAssistant() {
                   <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
                 </button>
                 <div className="ra-controls-center">
-                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } }} disabled={!isConnected || !providerUsesLiveAudio} data-testid="mic-button">
+                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={() => { if (providerUsesLiveAudio) { if (isMicEnabled) { stopMic(); setVoiceState('idle'); } else { startMic().then(() => setVoiceState('listening')); } } else if (isMicEnabled) { stopBrowserSpeechInput(); setVoiceState('idle'); } else { startBrowserSpeechInput(); } }} disabled={!isConnected} data-testid="mic-button">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                   </button>
                   <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
