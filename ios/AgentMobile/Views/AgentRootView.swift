@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentRootView: View {
     @Bindable var client: AgentSessionClient
     @State private var showingSettings = false
+    @State private var showTranscript = true
 
     var body: some View {
         NavigationStack {
@@ -14,17 +15,22 @@ struct AgentRootView: View {
                 )
                 .ignoresSafeArea()
 
-                VStack(spacing: 24) {
+                VStack(spacing: 16) {
                     header
-                    statusPanel
                     if client.isRunning {
-                        cameraSurface
+                        activeSessionLayout
+                    } else {
+                        statusPanel
                     }
                     if !client.setupGuideComplete {
                         setupGuide
                     }
-                    transcriptList
-                    controls
+                    if !client.isRunning || showTranscript {
+                        transcriptList
+                    }
+                    if !client.isRunning {
+                        startControls
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
@@ -103,6 +109,18 @@ struct AgentRootView: View {
         }
         .padding(16)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var activeSessionLayout: some View {
+        VStack(spacing: 0) {
+            cameraSurface
+            activeControls
+        }
+        .background(Color.black, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
@@ -190,6 +208,7 @@ struct AgentRootView: View {
             if client.cameraRunning {
                 CameraPreviewView(session: client.cameraSession)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .scaleEffect(x: client.cameraFacingFront ? -1 : 1, y: 1)
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "video.slash.fill")
@@ -219,6 +238,19 @@ struct AgentRootView: View {
                 .background(Color.black)
             }
 
+            voiceAura
+
+            VStack {
+                Spacer()
+                Text(voiceBadgeText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 5)
+                    .background(.black.opacity(0.62), in: Capsule())
+                    .padding(.bottom, 8)
+            }
+
             VStack {
                 HStack {
                     Spacer()
@@ -234,14 +266,90 @@ struct AgentRootView: View {
             .padding(10)
         }
         .frame(height: client.setupGuideComplete ? 330 : 210)
-        .background(Color.black, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
-        )
+        .background(Color.black)
     }
 
-    private var controls: some View {
+    private var voiceAura: some View {
+        ZStack {
+            Circle()
+                .stroke(auraColor.opacity(0.34), lineWidth: 1.5)
+                .scaleEffect(client.phase == .speaking ? 1.35 : 1.18)
+                .opacity(client.phase == .idle ? 0.18 : 0.55)
+            Circle()
+                .stroke(auraColor.opacity(0.22), lineWidth: 1.5)
+                .scaleEffect(client.phase == .thinking ? 1.1 : 1.0)
+            Image(systemName: client.microphoneRunning ? "waveform" : "mic.slash.fill")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.86))
+        }
+        .frame(width: 58, height: 58)
+        .background(.black.opacity(0.35), in: Circle())
+        .allowsHitTesting(false)
+        .animation(.easeInOut(duration: 0.45), value: client.phase)
+    }
+
+    private var activeControls: some View {
+        HStack(spacing: 12) {
+            ControlCircleButton(
+                systemImage: "text.bubble.fill",
+                isActive: showTranscript,
+                accessibilityLabel: showTranscript ? "Hide transcript" : "Show transcript"
+            ) {
+                showTranscript.toggle()
+            }
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 10) {
+                ControlCircleButton(
+                    systemImage: client.microphoneRunning ? "mic.fill" : "mic.slash.fill",
+                    isActive: client.microphoneRunning,
+                    accessibilityLabel: client.microphoneRunning ? "Turn microphone off" : "Turn microphone on"
+                ) {
+                    Task {
+                        await client.toggleMicrophone()
+                    }
+                }
+
+                ControlCircleButton(
+                    systemImage: "xmark",
+                    isActive: false,
+                    isDestructive: true,
+                    accessibilityLabel: "End agent session"
+                ) {
+                    Task {
+                        await client.stop()
+                    }
+                }
+
+                ControlCircleButton(
+                    systemImage: client.cameraRunning ? "video.fill" : "video.slash.fill",
+                    isActive: client.cameraRunning,
+                    accessibilityLabel: client.cameraRunning ? "Turn camera off" : "Turn camera on"
+                ) {
+                    Task {
+                        await client.toggleCamera()
+                    }
+                }
+
+                ControlCircleButton(
+                    systemImage: "arrow.triangle.2.circlepath.camera.fill",
+                    isActive: false,
+                    isDisabled: !client.cameraRunning,
+                    accessibilityLabel: "Flip camera"
+                ) {
+                    Task {
+                        await client.flipCamera()
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(Color(red: 0.065, green: 0.065, blue: 0.07).opacity(0.94))
+    }
+
+    private var startControls: some View {
         HStack(spacing: 12) {
             Button {
                 Task {
@@ -266,6 +374,41 @@ struct AgentRootView: View {
             .buttonStyle(.bordered)
             .disabled(!client.isRunning)
             .accessibilityLabel("End agent session")
+        }
+    }
+
+    private var voiceBadgeText: String {
+        if !client.microphoneRunning {
+            return "Mic off"
+        }
+        switch client.phase {
+        case .idle:
+            return "Idle"
+        case .connecting:
+            return "Connecting..."
+        case .listening:
+            return "Listening..."
+        case .speaking:
+            return "Speaking..."
+        case .thinking:
+            return "Thinking..."
+        case .error:
+            return "Needs attention"
+        }
+    }
+
+    private var auraColor: Color {
+        switch client.phase {
+        case .speaking:
+            Color(red: 0.35, green: 0.68, blue: 1.0)
+        case .thinking:
+            Color.white.opacity(0.45)
+        case .listening:
+            Color(red: 0.3, green: 0.86, blue: 0.55)
+        case .connecting:
+            Color(red: 1.0, green: 0.75, blue: 0.38)
+        case .idle, .error:
+            .white.opacity(0.5)
         }
     }
 
@@ -363,7 +506,7 @@ private struct TranscriptRow: View {
         case "system":
             "SYSTEM"
         default:
-            "AGENT"
+            "AI"
         }
     }
 
@@ -376,6 +519,54 @@ private struct TranscriptRow: View {
         default:
             Color.white.opacity(0.055)
         }
+    }
+}
+
+private struct ControlCircleButton: View {
+    let systemImage: String
+    let isActive: Bool
+    var isDestructive = false
+    var isDisabled = false
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(foreground)
+        .background(background, in: Circle())
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(isActive ? 0.0 : 0.08), lineWidth: 1)
+        )
+        .opacity(isDisabled ? 0.28 : 1)
+        .disabled(isDisabled)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var foreground: Color {
+        if isActive {
+            return .black
+        }
+        if isDestructive {
+            return Color(red: 1.0, green: 0.42, blue: 0.38)
+        }
+        return .white.opacity(0.78)
+    }
+
+    private var background: Color {
+        if isActive {
+            return .white
+        }
+        if isDestructive {
+            return Color.white.opacity(0.12)
+        }
+        return Color.white.opacity(0.09)
     }
 }
 

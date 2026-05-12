@@ -19,6 +19,9 @@ final class AgentSessionClient {
     var errorMessage: String?
     var cameraRunning = false
     var cameraError: String?
+    var microphoneRunning = false
+    var microphoneError: String?
+    var cameraFacingFront = false
     var setupGuideComplete: Bool {
         backTapSetupMarked && (shortcutSetupMarked || shortcutLaunchObserved)
     }
@@ -79,17 +82,22 @@ final class AgentSessionClient {
         }
 
         errorMessage = nil
+        microphoneError = nil
         transcript.removeAll()
         setPhase(.connecting, status: "Starting default agent...")
         isRunning = true
 
         do {
             try await connectSocket()
-            try await startMicrophone()
+            do {
+                try await startMicrophone()
+            } catch {
+                microphoneError = error.localizedDescription
+            }
             await startCamera()
             appendSystemLine(for: trigger)
-            setPhase(.listening, status: "Listening...")
-            await updateLiveActivity(status: "Listening through \(AgentDefaults.defaultPersonaName)")
+            setPhase(.listening, status: microphoneRunning ? "Listening..." : "Listening — microphone off")
+            await updateLiveActivity(status: microphoneRunning ? "Listening through \(AgentDefaults.defaultPersonaName)" : "Camera running, microphone off")
         } catch {
             errorMessage = error.localizedDescription
             setPhase(.error, status: error.localizedDescription)
@@ -120,6 +128,49 @@ final class AgentSessionClient {
 
     func retryCamera() async {
         await startCamera()
+    }
+
+    func toggleMicrophone() async {
+        guard isRunning else { return }
+        if microphoneRunning {
+            stopMicrophone()
+            setPhase(.listening, status: "Microphone off")
+            await updateLiveActivity(status: "Microphone off")
+            return
+        }
+
+        do {
+            try await startMicrophone()
+            setPhase(.listening, status: "Listening...")
+            await updateLiveActivity(status: "Listening through \(AgentDefaults.defaultPersonaName)")
+        } catch {
+            microphoneError = error.localizedDescription
+            errorMessage = error.localizedDescription
+            setPhase(.listening, status: "Microphone unavailable")
+            await updateLiveActivity(status: "Microphone unavailable")
+        }
+    }
+
+    func toggleCamera() async {
+        guard isRunning else { return }
+        if cameraRunning {
+            stopCamera()
+        } else {
+            await startCamera()
+        }
+    }
+
+    func flipCamera() async {
+        guard isRunning, cameraRunning else { return }
+        do {
+            cameraFacingFront = try await cameraStreamer.flipCamera()
+            await sendCameraStatus("on", reason: cameraFacingFront ? "Camera switched to front." : "Camera switched to back.")
+        } catch {
+            let message = error.localizedDescription
+            cameraError = message
+            errorMessage = message
+            await sendCameraStatus("unavailable", reason: message)
+        }
     }
 
     private func connectSocket() async throws {
@@ -253,6 +304,7 @@ final class AgentSessionClient {
     }
 
     private func startMicrophone() async throws {
+        guard !microphoneRunning else { return }
         let granted = await withCheckedContinuation { continuation in
             AVAudioApplication.requestRecordPermission { allowed in
                 continuation.resume(returning: allowed)
@@ -280,12 +332,15 @@ final class AgentSessionClient {
 
         audioEngine.prepare()
         try audioEngine.start()
+        microphoneRunning = true
+        microphoneError = nil
     }
 
     private func stopMicrophone() {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        microphoneRunning = false
     }
 
     private func startCamera() async {
@@ -293,6 +348,7 @@ final class AgentSessionClient {
             try await cameraStreamer.start()
             cameraRunning = true
             cameraError = nil
+            cameraFacingFront = cameraStreamer.isFrontCamera
             await sendCameraStatus("on")
         } catch {
             let message = error.localizedDescription
@@ -424,6 +480,11 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
     private let onStatus: (Bool, String?) -> Void
     private var configured = false
     private var lastFrameDate = Date.distantPast
+    private var currentPosition = AVCaptureDevice.Position.back
+
+    var isFrontCamera: Bool {
+        currentPosition == .front
+    }
 
     init(session: AVCaptureSession, onFrame: @escaping (Data) -> Void, onStatus: @escaping (Bool, String?) -> Void) {
         self.session = session
@@ -468,6 +529,20 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
         }
     }
 
+    func flipCamera() async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    let nextPosition: AVCaptureDevice.Position = self.currentPosition == .front ? .back : .front
+                    try self.configureInput(position: nextPosition)
+                    continuation.resume(returning: self.currentPosition == .front)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
     private func configureIfNeeded() throws {
         guard !configured else { return }
 
@@ -475,16 +550,7 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
         session.sessionPreset = .medium
         defer { session.commitConfiguration() }
 
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
-            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
-            throw NSError(domain: "CameraFrameStreamer", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera is available on this device."])
-        }
-
-        let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else {
-            throw NSError(domain: "CameraFrameStreamer", code: 3, userInfo: [NSLocalizedDescriptionKey: "Camera input cannot be added."])
-        }
-        session.addInput(input)
+        try addInput(position: currentPosition)
 
         let output = AVCaptureVideoDataOutput()
         output.alwaysDiscardsLateVideoFrames = true
@@ -499,6 +565,44 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
         output.connection(with: .video)?.videoRotationAngle = 90
 
         configured = true
+    }
+
+    private func configureInput(position: AVCaptureDevice.Position) throws {
+        if !configured {
+            currentPosition = position
+            try configureIfNeeded()
+            return
+        }
+
+        session.beginConfiguration()
+        defer { session.commitConfiguration() }
+
+        for input in session.inputs {
+            guard let deviceInput = input as? AVCaptureDeviceInput,
+                  deviceInput.device.hasMediaType(.video) else {
+                continue
+            }
+            session.removeInput(deviceInput)
+        }
+
+        try addInput(position: position)
+        for output in session.outputs {
+            output.connection(with: .video)?.videoRotationAngle = 90
+        }
+    }
+
+    private func addInput(position: AVCaptureDevice.Position) throws {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
+            throw NSError(domain: "CameraFrameStreamer", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera is available on this device."])
+        }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw NSError(domain: "CameraFrameStreamer", code: 3, userInfo: [NSLocalizedDescriptionKey: "Camera input cannot be added."])
+        }
+        session.addInput(input)
+        currentPosition = device.position == .unspecified ? position : device.position
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
