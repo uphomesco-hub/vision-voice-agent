@@ -30,6 +30,7 @@ Output STRICT JSON, no prose, no markdown fences:
 RULES — ABSOLUTE:
 - Report ONLY what is literally visible in THIS frame.
 - Never infer user actions. Write "battery compartment now empty with contacts exposed", NOT "user removed the battery".
+- If the frame is black, blank, blocked, or contains no readable useful scene, set objects and visible_features to empty arrays, set device_state to "No usable camera view is visible.", set confidence below 0.25, and leave changed_vs_prior empty.
 - If the frame is blurry, obscured, or dark, set confidence low and leave changed_vs_prior empty.
 - If a region that was visible before is now hidden by a hand, do NOT treat that as "removed" — leave changed_vs_prior empty for that object.
 - JSON only. No prose. No markdown."""

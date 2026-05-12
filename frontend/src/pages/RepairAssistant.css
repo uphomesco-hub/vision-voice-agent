@@ -215,7 +215,10 @@
 .ra-camera-section { flex: 1; position: relative; background: #000; display: flex; flex-direction: column; min-width: 0; }
 .ra-camera-container { position: relative; flex: 1; min-height: 0; }
 .ra-camera-feed { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-.ra-camera-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; }
+.ra-camera-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 24px; }
+.ra-camera-placeholder div { display: flex; flex-direction: column; gap: 6px; max-width: 320px; }
+.ra-camera-placeholder strong { color: var(--text); font-size: 15px; font-weight: 600; }
+.ra-camera-placeholder span { color: var(--text-2); line-height: 1.4; }
 
 .ra-voice-aura { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); width: 56px; height: 56px; pointer-events: none; }
 .ra-aura-ring { position: absolute; inset: 0; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.25); opacity: 0; }

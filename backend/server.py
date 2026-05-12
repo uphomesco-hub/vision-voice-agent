@@ -155,6 +155,7 @@ async def ws_session(websocket: WebSocket):
     alive = True
     session_id = None
     frame_count = 0
+    camera_status = "unavailable"
     nudge = NudgeEngine()
     ai_speaking = False
     intentional_end = False
@@ -225,6 +226,12 @@ async def ws_session(websocket: WebSocket):
                     history_context += "Do NOT call these tools again unless the user mentions a DIFFERENT device.\n"
 
         full_prompt = system_prompt + history_context + active_manual_context
+        full_prompt += (
+            "\n\nCAMERA AVAILABILITY: At session start no camera frame has been received yet. "
+            "Until you receive image frames, do not claim you can see the scene. "
+            "If the user asks what you see before frames arrive, say: "
+            "\"I can't see anything right now — please turn on the camera or check camera access in settings.\""
+        )
 
         # Connect to Gemini
         logger.info(f"[{session_id}] Connecting Gemini (resume={bool(resume_id)})")
@@ -393,6 +400,14 @@ async def ws_session(websocket: WebSocket):
 
                 elif t == "video":
                     frame_count += 1
+                    if camera_status != "on":
+                        camera_status = "on"
+                        await gemini_ws.send(json.dumps({
+                            "clientContent": {
+                                "turns": [{"role": "user", "parts": [{"text": "[CAMERA_STATUS: on] Camera frames are now available. Use only current visible frames for visual claims."}]}],
+                                "turnComplete": True,
+                            }
+                        }))
                     raw_b64 = msg["data"]
                     await gemini_ws.send(json.dumps({
                         "realtimeInput": {"mediaChunks": [{"mimeType": "image/jpeg", "data": raw_b64}]}
@@ -515,9 +530,36 @@ async def ws_session(websocket: WebSocket):
                 elif t == "text":
                     txt = msg.get("content", "")
                     if txt:
+                        if camera_status != "on" or frame_count == 0:
+                            txt = (
+                                "[CAMERA_STATUS: unavailable] No camera frame is currently available. "
+                                "If this message asks what you see, say you can't see anything right now and ask the user to turn on the camera or check camera access in settings. "
+                                "Do not guess.\n\n"
+                                f"USER MESSAGE: {txt}"
+                            )
                         await gemini_ws.send(json.dumps({
                             "clientContent": {"turns": [{"role": "user", "parts": [{"text": txt}]}], "turnComplete": True}
                         }))
+
+                elif t == "camera_status":
+                    state = msg.get("state", "unavailable")
+                    reason = msg.get("reason", "")
+                    if state not in {"on", "off", "unavailable"}:
+                        state = "unavailable"
+                    camera_status = state
+                    status_text = (
+                        f"[CAMERA_STATUS: {state}] "
+                        "The camera feed is not visible to you. "
+                        "If the user asks what you see, say you can't see anything right now and ask them to turn on the camera or check camera access in settings. "
+                        "Do not guess."
+                    )
+                    if state == "on":
+                        status_text = "[CAMERA_STATUS: on] Camera frames are available. Only describe what is visible in the current frame."
+                    if reason:
+                        status_text += f" Reason: {reason}"
+                    await gemini_ws.send(json.dumps({
+                        "clientContent": {"turns": [{"role": "user", "parts": [{"text": status_text}]}], "turnComplete": True}
+                    }))
 
                 elif t == "heartbeat":
                     await websocket.send_json({"type": "heartbeat"})
