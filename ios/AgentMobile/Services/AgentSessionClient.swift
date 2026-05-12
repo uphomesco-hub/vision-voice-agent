@@ -62,6 +62,7 @@ final class AgentSessionClient {
     private let playbackEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private var playbackConfigured = false
+    private let transcriptMergeWindow: TimeInterval = 8
 
     init() {
         backendBaseURL = defaults.string(forKey: AgentDefaults.backendBaseURLKey) ?? AgentDefaults.defaultBackendBaseURL
@@ -117,7 +118,7 @@ final class AgentSessionClient {
         }
         webSocketTask = nil
 
-        stopMicrophone()
+        stopMicrophone(deactivateSession: true)
         stopCamera()
         stopPlayback()
         isRunning = false
@@ -185,7 +186,8 @@ final class AgentSessionClient {
         try await sendJSON([
             "type": "config",
             "persona_id": AgentDefaults.defaultPersonaID,
-            "voice_id": AgentDefaults.defaultVoiceID
+            "voice_id": AgentDefaults.defaultVoiceID,
+            "language": "en-US"
         ])
 
         receiveTask = Task { [weak self] in
@@ -281,9 +283,7 @@ final class AgentSessionClient {
         case "transcription":
             let role = object["role"] as? String ?? "assistant"
             let lineText = object["text"] as? String ?? ""
-            guard !lineText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-            transcript.append(AgentTranscriptLine(role: role, text: lineText, createdAt: Date()))
-            trimTranscript()
+            appendTranscript(role: role, text: lineText)
             Task {
                 await updateLiveActivity(status: statusText)
             }
@@ -291,6 +291,15 @@ final class AgentSessionClient {
             if let encoded = object["data"] as? String {
                 playAudio(base64: encoded)
             }
+        case "turn_complete":
+            finalizeLatestTranscriptLine()
+            setPhase(.listening, status: microphoneRunning ? "Listening..." : "Microphone off")
+            Task {
+                await updateLiveActivity(status: statusText)
+            }
+        case "interrupted":
+            stopPlayback()
+            setPhase(.listening, status: microphoneRunning ? "Listening..." : "Microphone off")
         case "error":
             let message = object["message"] as? String ?? "Unknown error"
             errorMessage = message
@@ -314,9 +323,7 @@ final class AgentSessionClient {
             throw NSError(domain: "AgentSessionClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Microphone permission is required"])
         }
 
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try session.setActive(true)
+        try configureSharedAudioSession()
 
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -336,10 +343,12 @@ final class AgentSessionClient {
         microphoneError = nil
     }
 
-    private func stopMicrophone() {
+    private func stopMicrophone(deactivateSession: Bool = false) {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if deactivateSession {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         microphoneRunning = false
     }
 
@@ -394,19 +403,29 @@ final class AgentSessionClient {
     }
 
     private func configurePlaybackIfNeeded() {
-        guard !playbackConfigured else { return }
-        playbackEngine.attach(playerNode)
-        let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)
-        playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: format)
-        playbackEngine.prepare()
-        try? playbackEngine.start()
-        playbackConfigured = true
+        try? configureSharedAudioSession()
+        if !playbackConfigured {
+            playbackEngine.attach(playerNode)
+            let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)
+            playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: format)
+            playbackEngine.prepare()
+            playbackConfigured = true
+        }
+        if !playbackEngine.isRunning {
+            try? playbackEngine.start()
+        }
+    }
+
+    private func configureSharedAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP])
+        try session.setActive(true)
+        try? session.overrideOutputAudioPort(.speaker)
     }
 
     private func stopPlayback() {
         playerNode.stop()
         playbackEngine.stop()
-        playbackConfigured = false
     }
 
     private func sendJSON(_ object: [String: Any]) async throws {
@@ -431,7 +450,50 @@ final class AgentSessionClient {
         case .deepLink:
             message = "Resumed from Live Activity."
         }
-        transcript.append(AgentTranscriptLine(role: "system", text: message, createdAt: Date()))
+        transcript.append(AgentTranscriptLine(role: "system", text: message, createdAt: Date(), final: true))
+    }
+
+    private func appendTranscript(role: String, text: String) {
+        let cleaned = normalizedTranscriptText(text)
+        guard !cleaned.isEmpty, isEnglishLike(cleaned) else { return }
+
+        let now = Date()
+        if let lastIndex = transcript.indices.last,
+           transcript[lastIndex].role == role,
+           !transcript[lastIndex].final,
+           now.timeIntervalSince(transcript[lastIndex].createdAt) <= transcriptMergeWindow {
+            transcript[lastIndex].text = mergeTranscriptText(transcript[lastIndex].text, cleaned)
+        } else {
+            transcript.append(AgentTranscriptLine(role: role, text: cleaned, createdAt: now))
+        }
+        trimTranscript()
+    }
+
+    private func finalizeLatestTranscriptLine() {
+        guard let lastIndex = transcript.indices.last else { return }
+        transcript[lastIndex].final = true
+    }
+
+    private func normalizedTranscriptText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func mergeTranscriptText(_ current: String, _ next: String) -> String {
+        guard !current.isEmpty else { return next }
+        let needsSpace = !current.hasSuffix(" ") && !next.hasPrefix(" ") && !next.firstIsPunctuation
+        return current + (needsSpace ? " " : "") + next
+    }
+
+    private func isEnglishLike(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            if CharacterSet.letters.contains(scalar), !scalar.isLatinLetter {
+                return false
+            }
+        }
+        return true
     }
 
     private func trimTranscript() {
@@ -620,3 +682,24 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
 }
 
 extension CameraFrameStreamer: @unchecked Sendable {}
+
+private extension UnicodeScalar {
+    var isLatinLetter: Bool {
+        switch value {
+        case 0x0041...0x005A,
+             0x0061...0x007A,
+             0x00C0...0x024F,
+             0x1E00...0x1EFF:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private extension String {
+    var firstIsPunctuation: Bool {
+        guard let firstScalar = unicodeScalars.first else { return false }
+        return CharacterSet.punctuationCharacters.contains(firstScalar)
+    }
+}

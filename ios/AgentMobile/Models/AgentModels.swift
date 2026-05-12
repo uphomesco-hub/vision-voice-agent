@@ -20,6 +20,7 @@ struct AgentTranscriptLine: Identifiable, Hashable {
     let role: String
     var text: String
     let createdAt: Date
+    var final: Bool = false
 }
 
 struct AgentDefaults {

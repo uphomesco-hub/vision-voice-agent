@@ -8,49 +8,75 @@ struct AgentRootView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                LinearGradient(
-                    colors: [Color(red: 0.05, green: 0.06, blue: 0.07), Color(red: 0.01, green: 0.01, blue: 0.012)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
-                VStack(spacing: 16) {
-                    header
-                    if client.isRunning {
-                        activeSessionLayout
-                    } else {
-                        statusPanel
-                    }
-                    if !client.setupGuideComplete {
-                        setupGuide
-                    }
-                    if !client.isRunning || showTranscript {
-                        transcriptList
-                    }
-                    if !client.isRunning {
-                        startControls
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 16)
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
+                appBackground
+                if client.isRunning {
+                    activeSessionScreen
+                } else {
+                    idleScreen
                 }
             }
             .sheet(isPresented: $showingSettings) {
                 SettingsView(client: client)
                     .presentationDetents([.medium])
             }
+            .toolbar(.hidden, for: .navigationBar)
         }
+    }
+
+    private var appBackground: some View {
+        LinearGradient(
+            colors: [Color(red: 0.05, green: 0.06, blue: 0.07), Color(red: 0.01, green: 0.01, blue: 0.012)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+
+    private var idleScreen: some View {
+        VStack(spacing: 16) {
+            header
+            statusPanel
+            if !client.setupGuideComplete {
+                setupGuide
+            }
+            transcriptList
+            startControls
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 18)
+        .padding(.bottom, 16)
+    }
+
+    private var activeSessionScreen: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                ZStack {
+                    cameraSurface
+                    activeTopBar
+                }
+                .frame(height: activeCameraHeight(in: geometry.size.height))
+
+                activeControls
+
+                if showTranscript {
+                    transcriptPanel
+                        .frame(height: activeTranscriptHeight(in: geometry.size.height))
+                }
+            }
+            .background(Color.black)
+            .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private func activeCameraHeight(in totalHeight: CGFloat) -> CGFloat {
+        if showTranscript {
+            return max(300, totalHeight * 0.58)
+        }
+        return max(420, totalHeight - 68)
+    }
+
+    private func activeTranscriptHeight(in totalHeight: CGFloat) -> CGFloat {
+        max(220, totalHeight - activeCameraHeight(in: totalHeight) - 68)
     }
 
     private var header: some View {
@@ -66,9 +92,46 @@ struct AgentRootView: View {
                 }
                 Spacer()
                 phaseBadge
+                settingsButton
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var activeTopBar: some View {
+        VStack {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Vision Voice")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(client.statusText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .lineLimit(1)
+                }
+                Spacer()
+                phaseBadge
+                settingsButton
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            Spacer()
+        }
+    }
+
+    private var settingsButton: some View {
+        Button {
+            showingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.09), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.82))
+        .accessibilityLabel("Settings")
     }
 
     private var phaseBadge: some View {
@@ -130,7 +193,7 @@ struct AgentRootView: View {
     private var transcriptList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                LazyVStack(alignment: .leading, spacing: 4) {
                     if client.transcript.isEmpty {
                         ContentUnavailableView {
                             Label("Agent idle", systemImage: "mic.circle")
@@ -156,6 +219,27 @@ struct AgentRootView: View {
             }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private var transcriptPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Conversation")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white.opacity(0.46))
+                .textCase(.uppercase)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 6)
+            transcriptList
+                .padding(.horizontal, 10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 0.07, green: 0.07, blue: 0.075))
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.10))
+                .frame(height: 1)
+        }
     }
 
     private var setupGuide: some View {
@@ -265,7 +349,7 @@ struct AgentRootView: View {
             }
             .padding(10)
         }
-        .frame(height: client.setupGuideComplete ? 330 : 210)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
     }
 
@@ -485,18 +569,22 @@ private struct TranscriptRow: View {
     let line: AgentTranscriptLine
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 7) {
             Text(label)
-                .font(.caption.weight(.bold))
+                .font(.system(size: 8, weight: .bold))
                 .foregroundStyle(.white.opacity(0.52))
+                .frame(width: 28, alignment: .leading)
+                .padding(.top, 3)
             Text(line.text)
-                .font(.body)
-                .foregroundStyle(.white.opacity(0.9))
+                .font(.system(size: 12))
+                .lineSpacing(2)
+                .foregroundStyle(textColor)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private var label: String {
@@ -513,11 +601,22 @@ private struct TranscriptRow: View {
     private var background: Color {
         switch line.role {
         case "user":
-            Color.white.opacity(0.09)
+            Color.white.opacity(0.08)
         case "system":
-            Color(red: 0.95, green: 0.32, blue: 0.22).opacity(0.15)
+            Color.clear
         default:
-            Color.white.opacity(0.055)
+            Color.white.opacity(0.04)
+        }
+    }
+
+    private var textColor: Color {
+        switch line.role {
+        case "system":
+            .white.opacity(0.48)
+        case "assistant":
+            .white
+        default:
+            .white.opacity(0.76)
         }
     }
 }
