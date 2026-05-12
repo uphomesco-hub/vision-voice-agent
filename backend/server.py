@@ -169,6 +169,7 @@ async def ws_session(websocket: WebSocket):
 
         persona_id = cfg.get("persona_id", "calm-expert")
         voice_id = cfg.get("voice_id", "Puck")
+        language = cfg.get("language", "en-US")
         resume_id = cfg.get("resume_session_id")  # For reconnect-with-history
 
         # Create or resume session
@@ -232,6 +233,11 @@ async def ws_session(websocket: WebSocket):
             "If the user asks what you see before frames arrive, say: "
             "\"I can't see anything right now — please turn on the camera or check camera access in settings.\""
         )
+        if language.lower().startswith("en"):
+            full_prompt += (
+                "\n\nLANGUAGE: The client requested English. Speak only in English and keep all output transcription in English. "
+                "If the input audio transcription is in another language, answer in English anyway."
+            )
 
         # Connect to Gemini
         logger.info(f"[{session_id}] Connecting Gemini (resume={bool(resume_id)})")
@@ -272,7 +278,7 @@ async def ws_session(websocket: WebSocket):
         if not resume_id:
             greet_msg = {
                 "clientContent": {
-                    "turns": [{"role": "user", "parts": [{"text": "Session just started. Greet the user briefly and ask what device they need help with. Keep it to one natural sentence."}]}],
+                    "turns": [{"role": "user", "parts": [{"text": "Session just started. Greet the user briefly in English and ask what device they need help with. Keep it to one natural sentence."}]}],
                     "turnComplete": True
                 }
             }
