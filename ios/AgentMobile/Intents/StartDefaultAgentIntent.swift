@@ -18,10 +18,12 @@ struct AgentAppShortcuts: AppShortcutsProvider {
             intent: StartDefaultAgentIntent(),
             phrases: [
                 "Start \(.applicationName)",
+                "Open my agent in \(.applicationName)",
+                "Start my agent in \(.applicationName)",
                 "Open the agent in \(.applicationName)",
                 "Run Vision Voice in \(.applicationName)"
             ],
-            shortTitle: "Start Agent",
+            shortTitle: "Open My Agent",
             systemImageName: "waveform.circle.fill"
         )
     }
