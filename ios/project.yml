@@ -44,6 +44,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: co.uphomes.visionvoiceagent
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
   AgentLiveActivityExtension:
     type: app-extension
     platform: iOS

@@ -10,8 +10,8 @@ SwiftUI iOS client for the existing Vision Voice backend.
 
 ## Run locally
 
-1. Start the existing backend on the Mac at `http://127.0.0.1:8001`.
+1. Use the hosted backend at `https://16-16-11-190.sslip.io`, or start the existing backend on the Mac at `http://127.0.0.1:8001`.
 2. Open `ios/VisionVoiceAgent.xcodeproj`.
 3. Run the `AgentMobile` scheme on an iOS simulator.
 
-For a physical iPhone, set the backend URL in app settings to the Mac LAN address or deployed backend URL.
+For a physical iPhone, the default is the hosted backend. You can override it from the gear button if you want to point at a local Mac or a different deployed backend.

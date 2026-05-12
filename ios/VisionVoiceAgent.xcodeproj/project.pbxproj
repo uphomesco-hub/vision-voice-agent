@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0237BCE3602059B3F8F70B2F /* StartDefaultAgentIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055E2EEB10902B0B8427A6BA /* StartDefaultAgentIntent.swift */; };
+		0E3FFD2AE5C41080CA7757B2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C86A843B0EB067D472AC0F38 /* Assets.xcassets */; };
 		34A63C8DCCE5E3BFA5CF04D1 /* AgentLiveActivityExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = F5F9E960C7FF797F41D3707D /* AgentLiveActivityExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		434D8C69C112B020DDC897A9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A7ACC466EFABB14A3FE676 /* SettingsView.swift */; };
 		59987F97E67C34122B8B7059 /* AgentLiveActivityBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 721EA37B152A2BA60A490A0B /* AgentLiveActivityBundle.swift */; };
@@ -59,6 +60,7 @@
 		8D2B429696F29B8E6F280C7F /* AgentMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AgentMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BD9031EB515EC61DD54C30B8 /* AgentActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityAttributes.swift; sourceTree = "<group>"; };
 		C5D4A519335989BE3C839FFE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C86A843B0EB067D472AC0F38 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		D5CA7FCB38163FC8114D748B /* AgentLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityWidget.swift; sourceTree = "<group>"; };
 		E0A7ACC466EFABB14A3FE676 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E3BD00435A403AF512888C91 /* AgentLaunchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLaunchStore.swift; sourceTree = "<group>"; };
@@ -144,6 +146,7 @@
 			isa = PBXGroup;
 			children = (
 				4E61623F282752610A74AEB6 /* AgentMobile.entitlements */,
+				C86A843B0EB067D472AC0F38 /* Assets.xcassets */,
 				C5D4A519335989BE3C839FFE /* Info.plist */,
 				E8E06B39E1C15F5F808ECAAE /* App */,
 				2A4FE985C799E091FD9027BA /* Intents */,
@@ -170,6 +173,7 @@
 			buildConfigurationList = A98A1F140DCFF68E5629E17A /* Build configuration list for PBXNativeTarget "AgentMobile" */;
 			buildPhases = (
 				F231FC294CCB440AD73FB31A /* Sources */,
+				BBC79C7586C20B1728C09D54 /* Resources */,
 				BA00B74E391A1D363A1CDE13 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
@@ -240,6 +244,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		BBC79C7586C20B1728C09D54 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0E3FFD2AE5C41080CA7757B2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		C6840BF57132E75407698D0F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -298,7 +313,7 @@
 		1A98BCC5F9A1347BD19DDA6D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ENTITLEMENTS = AgentMobile/AgentMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = AgentMobile/Info.plist;
@@ -400,7 +415,7 @@
 		9BA64632B262CCD96B3A8AB2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
 				CODE_SIGN_ENTITLEMENTS = AgentMobile/AgentMobile.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_FILE = AgentMobile/Info.plist;

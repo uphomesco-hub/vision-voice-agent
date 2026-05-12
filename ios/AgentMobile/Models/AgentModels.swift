@@ -29,5 +29,5 @@ struct AgentDefaults {
     static let defaultPersonaID = "calm-expert"
     static let defaultPersonaName = "Marcus"
     static let defaultVoiceID = "Puck"
-    static let defaultBackendBaseURL = "http://127.0.0.1:8001"
+    static let defaultBackendBaseURL = "https://16-16-11-190.sslip.io"
 }
