@@ -214,7 +214,8 @@
 .ra-session-layout { display: flex; width: 100%; height: 100%; }
 .ra-camera-section { flex: 1; position: relative; background: #000; display: flex; flex-direction: column; min-width: 0; }
 .ra-camera-container { position: relative; flex: 1; min-height: 0; }
-.ra-camera-feed { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+.ra-camera-feed { width: 100%; height: 100%; object-fit: cover; }
+.ra-camera-feed.mirrored { transform: scaleX(-1); }
 .ra-camera-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 24px; }
 .ra-camera-placeholder div { display: flex; flex-direction: column; gap: 6px; max-width: 320px; }
 .ra-camera-placeholder strong { color: var(--text); font-size: 15px; font-weight: 600; }

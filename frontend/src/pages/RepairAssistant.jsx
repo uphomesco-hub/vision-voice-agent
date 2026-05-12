@@ -383,7 +383,7 @@ export default function RepairAssistant() {
           <div className={`ra-session-layout ${!showTranscript ? 'no-transcript' : ''}`}>
             <div className="ra-camera-section">
               <div className="ra-camera-container" data-testid="camera-container">
-                <video ref={videoRef} className={`ra-camera-feed ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
+                <video ref={videoRef} className={`ra-camera-feed ${cameraFacing === 'user' ? 'mirrored' : ''} ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
                 {!cameraEnabled && <div className="ra-camera-placeholder"><div><strong>I can't see anything right now.</strong><span>{cameraError || 'Turn on the camera or check browser camera access.'}</span></div></div>}
                 <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
                   <div className="ra-aura-ring"></div><div className="ra-aura-ring delay-1"></div><div className="ra-aura-ring delay-2"></div>
