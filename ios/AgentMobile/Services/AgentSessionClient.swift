@@ -16,6 +16,21 @@ final class AgentSessionClient {
     var transcript: [AgentTranscriptLine] = []
     var isRunning = false
     var errorMessage: String?
+    var backTapSetupMarked: Bool {
+        didSet {
+            defaults.set(backTapSetupMarked, forKey: AgentDefaults.backTapSetupMarkedKey)
+        }
+    }
+    var shortcutSetupMarked: Bool {
+        didSet {
+            defaults.set(shortcutSetupMarked, forKey: AgentDefaults.shortcutSetupMarkedKey)
+        }
+    }
+    var shortcutLaunchObserved: Bool {
+        didSet {
+            defaults.set(shortcutLaunchObserved, forKey: AgentDefaults.shortcutLaunchObservedKey)
+        }
+    }
 
     private let defaults = UserDefaults(suiteName: AgentDefaults.appGroup) ?? .standard
     private let liveActivity = LiveActivityController()
@@ -29,9 +44,17 @@ final class AgentSessionClient {
 
     init() {
         backendBaseURL = defaults.string(forKey: AgentDefaults.backendBaseURLKey) ?? AgentDefaults.defaultBackendBaseURL
+        backTapSetupMarked = defaults.bool(forKey: AgentDefaults.backTapSetupMarkedKey)
+        shortcutSetupMarked = defaults.bool(forKey: AgentDefaults.shortcutSetupMarkedKey)
+        shortcutLaunchObserved = defaults.bool(forKey: AgentDefaults.shortcutLaunchObservedKey)
     }
 
     func startDefaultAgent(trigger: AgentStartTrigger = .manual) async {
+        if trigger == .shortcut {
+            shortcutLaunchObserved = true
+            shortcutSetupMarked = true
+        }
+
         if isRunning {
             await updateLiveActivity(status: "Agent already running")
             return

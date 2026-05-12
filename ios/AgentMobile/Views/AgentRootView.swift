@@ -17,6 +17,7 @@ struct AgentRootView: View {
                 VStack(spacing: 24) {
                     header
                     statusPanel
+                    setupGuide
                     transcriptList
                     controls
                 }
@@ -134,6 +135,51 @@ struct AgentRootView: View {
         .frame(maxHeight: .infinity)
     }
 
+    private var setupGuide: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "hand.tap.fill")
+                    .foregroundStyle(Color(red: 0.95, green: 0.32, blue: 0.22))
+                Text("Quick setup")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Spacer()
+            }
+
+            SetupStepRow(
+                title: "Back Tap",
+                detail: "Settings > Accessibility > Touch > Back Tap > Double Tap > Open My Agent.",
+                isDone: client.backTapSetupMarked,
+                doneLabel: "Mark Done"
+            ) {
+                client.backTapSetupMarked.toggle()
+            }
+
+            Divider()
+                .overlay(Color.white.opacity(0.12))
+
+            SetupStepRow(
+                title: "Siri",
+                detail: "Say: \"Hey Siri, open my agent in Vision Voice.\"",
+                isDone: client.shortcutSetupMarked || client.shortcutLaunchObserved,
+                doneLabel: client.shortcutLaunchObserved ? "Verified" : "Mark Done"
+            ) {
+                client.shortcutSetupMarked.toggle()
+            }
+
+            Text("iOS does not let apps verify the Back Tap setting directly. Siri is marked verified after it opens this shortcut once.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.52))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
     private var controls: some View {
         HStack(spacing: 12) {
             Button {
@@ -191,6 +237,42 @@ struct AgentRootView: View {
             Color(red: 0.35, green: 0.68, blue: 1.0)
         case .error:
             Color(red: 1.0, green: 0.45, blue: 0.38)
+        }
+    }
+}
+
+private struct SetupStepRow: View {
+    let title: String
+    let detail: String
+    let isDone: Bool
+    let doneLabel: String
+    let onToggleDone: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(isDone ? Color(red: 0.3, green: 0.86, blue: 0.55) : .white.opacity(0.45))
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(doneLabel) {
+                onToggleDone()
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.bordered)
+            .tint(isDone ? Color(red: 0.3, green: 0.86, blue: 0.55) : Color(red: 0.95, green: 0.32, blue: 0.22))
         }
     }
 }
