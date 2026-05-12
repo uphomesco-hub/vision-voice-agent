@@ -17,6 +17,7 @@
 		B4DBD5A63FDA8D803AF8C066 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9031EB515EC61DD54C30B8 /* AgentActivityAttributes.swift */; };
 		B895922C1B7B6645D5BBA262 /* AgentRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0437F35B3E26DB29F57638DB /* AgentRootView.swift */; };
 		C127A5131A8BB19C9496ECD2 /* AgentActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9031EB515EC61DD54C30B8 /* AgentActivityAttributes.swift */; };
+		CBAAA6E747355B209CE1898A /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B04F1F6032FAC017808AAE5 /* CameraPreviewView.swift */; };
 		D0367F40D18AF5B8BAA5FB3C /* AgentLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5CA7FCB38163FC8114D748B /* AgentLiveActivityWidget.swift */; };
 		D83C7F444D966D5F3379EB00 /* AgentLaunchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3BD00435A403AF512888C91 /* AgentLaunchStore.swift */; };
 		DD08F1243165A689289492CC /* AgentSessionClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE606622E54A58B1D9CB5ED /* AgentSessionClient.swift */; };
@@ -52,6 +53,7 @@
 		0437F35B3E26DB29F57638DB /* AgentRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRootView.swift; sourceTree = "<group>"; };
 		055E2EEB10902B0B8427A6BA /* StartDefaultAgentIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartDefaultAgentIntent.swift; sourceTree = "<group>"; };
 		2660A969804F6111C18E3B6D /* AgentModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentModels.swift; sourceTree = "<group>"; };
+		2B04F1F6032FAC017808AAE5 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		4AA67EBE98B3A610FA578C4B /* AgentLiveActivityExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgentLiveActivityExtension.entitlements; sourceTree = "<group>"; };
 		4E61623F282752610A74AEB6 /* AgentMobile.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgentMobile.entitlements; sourceTree = "<group>"; };
 		721EA37B152A2BA60A490A0B /* AgentLiveActivityBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityBundle.swift; sourceTree = "<group>"; };
@@ -137,6 +139,7 @@
 			isa = PBXGroup;
 			children = (
 				0437F35B3E26DB29F57638DB /* AgentRootView.swift */,
+				2B04F1F6032FAC017808AAE5 /* CameraPreviewView.swift */,
 				E0A7ACC466EFABB14A3FE676 /* SettingsView.swift */,
 			);
 			path = Views;
@@ -276,6 +279,7 @@
 				F0550CFD313845168AD3D928 /* AgentModels.swift in Sources */,
 				B895922C1B7B6645D5BBA262 /* AgentRootView.swift in Sources */,
 				DD08F1243165A689289492CC /* AgentSessionClient.swift in Sources */,
+				CBAAA6E747355B209CE1898A /* CameraPreviewView.swift in Sources */,
 				6A78A3D3B230C2632A0208C5 /* LiveActivityController.swift in Sources */,
 				434D8C69C112B020DDC897A9 /* SettingsView.swift in Sources */,
 				0237BCE3602059B3F8F70B2F /* StartDefaultAgentIntent.swift in Sources */,

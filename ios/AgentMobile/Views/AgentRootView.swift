@@ -17,7 +17,12 @@ struct AgentRootView: View {
                 VStack(spacing: 24) {
                     header
                     statusPanel
-                    setupGuide
+                    if client.isRunning {
+                        cameraSurface
+                    }
+                    if !client.setupGuideComplete {
+                        setupGuide
+                    }
                     transcriptList
                     controls
                 }
@@ -174,6 +179,62 @@ struct AgentRootView: View {
         }
         .padding(14)
         .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var cameraSurface: some View {
+        ZStack {
+            if client.cameraRunning {
+                CameraPreviewView(session: client.cameraSession)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                VStack(spacing: 8) {
+                    Image(systemName: "video.slash.fill")
+                        .font(.title2)
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text("I can't see anything right now.")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(client.cameraError ?? "Turn on camera access in iPhone Settings for Vision Voice.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        Task {
+                            await client.retryCamera()
+                        }
+                    } label: {
+                        Label("Retry Camera", systemImage: "arrow.clockwise")
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.bordered)
+                    .tint(Color(red: 0.95, green: 0.32, blue: 0.22))
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Label(client.cameraRunning ? "Camera on" : "Camera off", systemImage: client.cameraRunning ? "video.fill" : "video.slash.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.55), in: Capsule())
+                }
+                Spacer()
+            }
+            .padding(10)
+        }
+        .frame(height: client.setupGuideComplete ? 330 : 210)
+        .background(Color.black, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)

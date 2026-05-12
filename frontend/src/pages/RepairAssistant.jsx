@@ -26,6 +26,7 @@ export default function RepairAssistant() {
   const [warnings, setWarnings] = useState([]);
   const [steps, setSteps] = useState([]);
   const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [cameraError, setCameraError] = useState('');
   const [cameraFacing, setCameraFacing] = useState('environment');
   const [showTranscript, setShowTranscript] = useState(true);
   const [visionStatus, setVisionStatus] = useState(null);
@@ -84,6 +85,11 @@ export default function RepairAssistant() {
     }
     isPlayingRef.current = false;
   };
+
+  const sendCameraStatus = useCallback((state, reason = '') => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    try { wsRef.current.send(JSON.stringify({ type: 'camera_status', state, reason })); } catch {}
+  }, []);
 
   // ─── WS Message Handler ──────────
   const handleMsg = useCallback((event) => {
@@ -178,16 +184,50 @@ export default function RepairAssistant() {
   const facingRef = useRef('environment');
   const startCamera = async (facing) => {
     const mode = facing || facingRef.current;
-    try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode, width: 640, height: 480 } });
-      camStreamRef.current = stream; if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); } setCameraEnabled(true);
-      frameCountRef.current = 0; frameIntervalRef.current = setInterval(() => captureFrame(), 2000); log('CAM', `Active (${mode})`);
-    } catch (e) { log('CAM', 'Denied:', e.message); }
+    try {
+      setCameraError('');
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode, width: 640, height: 480 } });
+      camStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setCameraEnabled(true);
+      sendCameraStatus('on');
+      frameCountRef.current = 0;
+      if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = setInterval(() => captureFrame(), 2000);
+      setTimeout(() => captureFrame(), 500);
+      log('CAM', `Active (${mode})`);
+      return true;
+    } catch (e) {
+      const message = e?.name === 'NotAllowedError'
+        ? 'Camera access blocked. Enable camera permission in browser settings.'
+        : `Camera unavailable: ${e.message || 'check camera settings'}`;
+      setCameraError(message);
+      setCameraEnabled(false);
+      sendCameraStatus('unavailable', message);
+      log('CAM', 'Denied:', e.message);
+      return false;
+    }
   };
-  const captureFrame = () => { if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+  const captureFrame = () => {
+    if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (videoRef.current.readyState < 2 || !videoRef.current.videoWidth || !videoRef.current.videoHeight) {
+      sendCameraStatus('unavailable', 'Camera preview is not producing frames.');
+      return;
+    }
     const c = document.createElement('canvas'); c.width = 640; c.height = 480; c.getContext('2d').drawImage(videoRef.current, 0, 0, 640, 480);
     try { wsRef.current.send(JSON.stringify({ type: 'video', data: c.toDataURL('image/jpeg', 0.6).split(',')[1] })); frameCountRef.current++; if (frameCountRef.current % 5 === 0) log('CAM', `${frameCountRef.current} frames`); } catch {}
   };
-  const stopCamera = useCallback(() => { if (frameIntervalRef.current) clearInterval(frameIntervalRef.current); frameIntervalRef.current = null; camStreamRef.current?.getTracks().forEach(t => t.stop()); camStreamRef.current = null; setCameraEnabled(false); }, []);
+  const stopCamera = useCallback(() => {
+    if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+    frameIntervalRef.current = null;
+    camStreamRef.current?.getTracks().forEach(t => t.stop());
+    camStreamRef.current = null;
+    setCameraEnabled(false);
+    sendCameraStatus('off', 'Camera was turned off in the app.');
+  }, [sendCameraStatus]);
   const flipCamera = async () => {
     const newFacing = facingRef.current === 'environment' ? 'user' : 'environment';
     facingRef.current = newFacing; setCameraFacing(newFacing);
@@ -221,7 +261,7 @@ export default function RepairAssistant() {
       return;
     }
     try { log('SESSION', 'Starting...'); setStatus('Connecting...'); configRef.current = { persona_id: selectedPersona, voice_id: selectedVoice }; sessionActiveRef.current = true; reconnectCountRef.current = 0;
-      await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 1500)); await startMic(); await startCamera(); setVoiceState('listening'); setStatus('Listening...'); setTranscript([{ role: 'system', text: 'Session started — speak and show your device!', final: true }]); log('SESSION', 'Active');
+      await connectWS(); setIsConnected(true); await new Promise(r => setTimeout(r, 1500)); await startMic(); const cameraStarted = await startCamera(); setVoiceState('listening'); setStatus(cameraStarted ? 'Listening...' : 'Listening — camera unavailable'); setTranscript([{ role: 'system', text: cameraStarted ? 'Session started — speak and show your device!' : 'Session started, but I cannot see anything until camera access is enabled.', final: true }]); log('SESSION', 'Active');
     } catch (e) { sessionActiveRef.current = false; setStatus('Error: ' + e.message); stopMic(); stopCamera(); wsRef.current?.close(); wsRef.current = null; }
   };
   const endSession = () => { log('SESSION', 'Ending'); sessionActiveRef.current = false; cleanup();
@@ -344,7 +384,7 @@ export default function RepairAssistant() {
             <div className="ra-camera-section">
               <div className="ra-camera-container" data-testid="camera-container">
                 <video ref={videoRef} className={`ra-camera-feed ${!cameraEnabled ? 'hidden' : ''}`} autoPlay playsInline muted data-testid="camera-feed" />
-                {!cameraEnabled && <div className="ra-camera-placeholder">Camera is off</div>}
+                {!cameraEnabled && <div className="ra-camera-placeholder"><div><strong>I can't see anything right now.</strong><span>{cameraError || 'Turn on the camera or check browser camera access.'}</span></div></div>}
                 <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
                   <div className="ra-aura-ring"></div><div className="ra-aura-ring delay-1"></div><div className="ra-aura-ring delay-2"></div>
                 </div>

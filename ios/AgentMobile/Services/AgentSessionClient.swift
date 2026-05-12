@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import UIKit
 
 @Observable
 @MainActor
@@ -16,6 +17,11 @@ final class AgentSessionClient {
     var transcript: [AgentTranscriptLine] = []
     var isRunning = false
     var errorMessage: String?
+    var cameraRunning = false
+    var cameraError: String?
+    var setupGuideComplete: Bool {
+        backTapSetupMarked && (shortcutSetupMarked || shortcutLaunchObserved)
+    }
     var backTapSetupMarked: Bool {
         didSet {
             defaults.set(backTapSetupMarked, forKey: AgentDefaults.backTapSetupMarkedKey)
@@ -34,6 +40,18 @@ final class AgentSessionClient {
 
     private let defaults = UserDefaults(suiteName: AgentDefaults.appGroup) ?? .standard
     private let liveActivity = LiveActivityController()
+    let cameraSession = AVCaptureSession()
+    @ObservationIgnored private lazy var cameraStreamer = CameraFrameStreamer(session: cameraSession) { [weak self] jpegData in
+        Task { @MainActor [weak self] in
+            guard let self, self.webSocketTask != nil else { return }
+            try? await self.sendJSON(["type": "video", "data": jpegData.base64EncodedString()])
+        }
+    } onStatus: { [weak self] running, message in
+        Task { @MainActor [weak self] in
+            self?.cameraRunning = running
+            self?.cameraError = message
+        }
+    }
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
@@ -68,6 +86,7 @@ final class AgentSessionClient {
         do {
             try await connectSocket()
             try await startMicrophone()
+            await startCamera()
             appendSystemLine(for: trigger)
             setPhase(.listening, status: "Listening...")
             await updateLiveActivity(status: "Listening through \(AgentDefaults.defaultPersonaName)")
@@ -91,11 +110,16 @@ final class AgentSessionClient {
         webSocketTask = nil
 
         stopMicrophone()
+        stopCamera()
         stopPlayback()
         isRunning = false
         sessionID = nil
         setPhase(.idle, status: "Ready")
         await liveActivity.end()
+    }
+
+    func retryCamera() async {
+        await startCamera()
     }
 
     private func connectSocket() async throws {
@@ -123,6 +147,10 @@ final class AgentSessionClient {
                 try? await self?.sendJSON(["type": "heartbeat"])
             }
         }
+    }
+
+    private func sendCameraStatus(_ state: String, reason: String = "") async {
+        try? await sendJSON(["type": "camera_status", "state": state, "reason": reason])
     }
 
     private func websocketURL() -> URL? {
@@ -260,6 +288,28 @@ final class AgentSessionClient {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
+    private func startCamera() async {
+        do {
+            try await cameraStreamer.start()
+            cameraRunning = true
+            cameraError = nil
+            await sendCameraStatus("on")
+        } catch {
+            let message = error.localizedDescription
+            cameraRunning = false
+            cameraError = message
+            await sendCameraStatus("unavailable", reason: message)
+        }
+    }
+
+    private func stopCamera() {
+        cameraStreamer.stop()
+        cameraRunning = false
+        Task {
+            await sendCameraStatus("off", reason: "Camera was turned off in the app.")
+        }
+    }
+
     private func playAudio(base64: String) {
         guard let data = Data(base64Encoded: base64), !data.isEmpty else { return }
         configurePlaybackIfNeeded()
@@ -365,3 +415,104 @@ final class AgentSessionClient {
         }
     }
 }
+
+private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private let session: AVCaptureSession
+    private let queue = DispatchQueue(label: "co.uphomes.visionvoiceagent.camera")
+    private let context = CIContext()
+    private let onFrame: (Data) -> Void
+    private let onStatus: (Bool, String?) -> Void
+    private var configured = false
+    private var lastFrameDate = Date.distantPast
+
+    init(session: AVCaptureSession, onFrame: @escaping (Data) -> Void, onStatus: @escaping (Bool, String?) -> Void) {
+        self.session = session
+        self.onFrame = onFrame
+        self.onStatus = onStatus
+        super.init()
+    }
+
+    func start() async throws {
+        let granted = await withCheckedContinuation { continuation in
+            AVCaptureDevice.requestAccess(for: .video) { allowed in
+                continuation.resume(returning: allowed)
+            }
+        }
+        guard granted else {
+            throw NSError(domain: "CameraFrameStreamer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Camera access is blocked. Enable camera permission in Settings."])
+        }
+
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                do {
+                    try self.configureIfNeeded()
+                    if !self.session.isRunning {
+                        self.session.startRunning()
+                    }
+                    self.onStatus(true, nil)
+                    continuation.resume()
+                } catch {
+                    self.onStatus(false, error.localizedDescription)
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func stop() {
+        queue.async {
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            self.onStatus(false, nil)
+        }
+    }
+
+    private func configureIfNeeded() throws {
+        guard !configured else { return }
+
+        session.beginConfiguration()
+        session.sessionPreset = .medium
+        defer { session.commitConfiguration() }
+
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
+            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
+            throw NSError(domain: "CameraFrameStreamer", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera is available on this device."])
+        }
+
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw NSError(domain: "CameraFrameStreamer", code: 3, userInfo: [NSLocalizedDescriptionKey: "Camera input cannot be added."])
+        }
+        session.addInput(input)
+
+        let output = AVCaptureVideoDataOutput()
+        output.alwaysDiscardsLateVideoFrames = true
+        output.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        output.setSampleBufferDelegate(self, queue: queue)
+        guard session.canAddOutput(output) else {
+            throw NSError(domain: "CameraFrameStreamer", code: 4, userInfo: [NSLocalizedDescriptionKey: "Camera output cannot be added."])
+        }
+        session.addOutput(output)
+        output.connection(with: .video)?.videoRotationAngle = 90
+
+        configured = true
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard Date().timeIntervalSince(lastFrameDate) >= 2 else { return }
+        lastFrameDate = Date()
+
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let ciImage = CIImage(cvPixelBuffer: imageBuffer)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let data = context.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.6]) else {
+            return
+        }
+        onFrame(data)
+    }
+}
+
+extension CameraFrameStreamer: @unchecked Sendable {}
