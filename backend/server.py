@@ -843,8 +843,9 @@ async def handle_tool_call(
                     "blocked": True,
                     "block_reason": ground_reason,
                     "no_manual_instruction": (
-                        "Do not open a manual yet. Tell the user you need to see the device clearly "
-                        "on camera first. Do not guess the device."
+                        "Do not open a manual yet. Ask the user to show the device more clearly, "
+                        "bring the label/model number closer to the camera, or say the model number "
+                        "while keeping the device on camera. Do not guess the device."
                     ),
                 }
             else:
