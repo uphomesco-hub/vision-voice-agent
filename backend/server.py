@@ -48,11 +48,16 @@ def compute_frame_diff(prev_bytes, curr_bytes):
         return 0.0
 
 # ─── Perception state cache (survives WS reconnects within same process) ───
-_perception_cache: Dict[str, Dict[str, Any]] = {}  # session_id → {last_perception, last_perception_sig, prev_frame_bytes}
+_perception_cache: Dict[str, Dict[str, Any]] = {}
 
 def _get_perception_state(sid: str) -> Dict[str, Any]:
     if sid not in _perception_cache:
-        _perception_cache[sid] = {"last_perception": None, "last_perception_sig": "", "prev_frame_bytes": None}
+        _perception_cache[sid] = {
+            "last_perception": None,
+            "last_perception_sig": "",
+            "prev_frame_bytes": None,
+            "latest_frame_b64": None,
+        }
     return _perception_cache[sid]
 
 def _clear_perception_state(sid: str):
@@ -92,37 +97,10 @@ def _manual_lookup_terms(args: Dict[str, Any]) -> List[str]:
     return [term for term in terms if not (term in seen or seen.add(term))]
 
 
-def _term_negated_in_text(text: str, term: str) -> bool:
-    for match in re.finditer(re.escape(term), text):
-        before = text[max(0, match.start() - 32):match.start()]
-        if re.search(r"\b(no|not|isnt|isn't|wasnt|wasn't|without|never)\b", before):
-            return True
-    return False
-
-
-def _manual_lookup_grounded(
-    args: Dict[str, Any],
-    session_id: str,
-    *,
-    last_user_text: str = "",
-    camera_status: str = "unavailable",
-    frame_count: int = 0,
-) -> Tuple[bool, str]:
-    terms = _manual_lookup_terms(args)
-    if not terms:
-        return False, "manual lookup had no named device terms"
-
-    user_text = (last_user_text or "").lower()
-    if user_text and any(term in user_text and not _term_negated_in_text(user_text, term) for term in terms):
-        return True, "user named the device"
-
-    if camera_status != "on" or frame_count <= 0:
-        return False, "camera is unavailable"
-
-    perception = (_get_perception_state(session_id).get("last_perception") or {})
+def _perception_confirms_terms(perception: Dict[str, Any], terms: List[str]) -> bool:
     confidence = float(perception.get("confidence", 0) or 0)
     if confidence < 0.55:
-        return False, "no confident visual device confirmation"
+        return False
 
     visual_fields = [
         perception.get("device_state", ""),
@@ -131,10 +109,72 @@ def _manual_lookup_grounded(
         " ".join(str(x) for x in perception.get("changed_vs_prior", []) or []),
     ]
     visual_text = " ".join(visual_fields).lower()
-    if any(term in visual_text for term in terms):
+    return any(term in visual_text for term in terms)
+
+
+def _manual_lookup_grounded(
+    args: Dict[str, Any],
+    session_id: str,
+    *,
+    camera_status: str = "unavailable",
+    frame_count: int = 0,
+) -> Tuple[bool, str]:
+    terms = _manual_lookup_terms(args)
+    if not terms:
+        return False, "manual lookup had no named device terms"
+
+    if camera_status != "on" or frame_count <= 0:
+        return False, "camera is unavailable"
+
+    perception = (_get_perception_state(session_id).get("last_perception") or {})
+    if _perception_confirms_terms(perception, terms):
         return True, "visual perception confirmed the device"
 
     return False, "requested manual terms were not visible"
+
+
+async def _confirm_manual_lookup_grounding(
+    args: Dict[str, Any],
+    session_id: str,
+    *,
+    camera_status: str = "unavailable",
+    frame_count: int = 0,
+) -> Tuple[bool, str]:
+    grounded, reason = _manual_lookup_grounded(
+        args,
+        session_id,
+        camera_status=camera_status,
+        frame_count=frame_count,
+    )
+    if grounded:
+        return grounded, reason
+
+    terms = _manual_lookup_terms(args)
+    pstate = _get_perception_state(session_id)
+    latest_frame_b64 = pstate.get("latest_frame_b64")
+    if not terms:
+        return False, "manual lookup had no named device terms"
+    if camera_status != "on" or frame_count <= 0 or not latest_frame_b64:
+        return False, "camera is unavailable"
+
+    try:
+        obs = await perceive_scene(latest_frame_b64, prior_obs=pstate.get("last_perception"))
+    except Exception as e:
+        logger.warning(f"[{session_id}] silent manual vision confirmation failed: {e}")
+        return False, "silent vision confirmation failed"
+
+    if not obs:
+        return False, "silent vision confirmation returned no observation"
+
+    confidence = float(obs.get("confidence", 0) or 0)
+    if confidence >= 0.5:
+        pstate["last_perception"] = obs
+        pstate["last_perception_sig"] = observation_signature(obs)
+
+    if _perception_confirms_terms(obs, terms):
+        return True, "silent camera confirmation matched the requested device"
+
+    return False, "silent camera confirmation did not see the requested device"
 
 
 async def close_active_manual(session_id: str, client_ws: WebSocket, gemini_ws=None, reason: str = ""):
@@ -173,7 +213,7 @@ async def close_active_manual(session_id: str, client_ws: WebSocket, gemini_ws=N
 
 LOOKUP_MANUAL_DECL = {
     "name": "lookup_manual",
-    "description": "Search internal repair manuals database for a specific device. Returns structured repair guidance, troubleshooting steps, warnings, and tool requirements. Use when the user identifies a device or a label/model becomes visible.",
+    "description": "Search internal repair manuals database for a specific device. Returns structured repair guidance, troubleshooting steps, warnings, and tool requirements. Use only after the device is visible on the current camera feed; the backend will silently verify the latest frame before opening a manual.",
     "parameters": {
         "type": "OBJECT",
         "properties": {
@@ -420,7 +460,6 @@ async def ws_session(websocket: WebSocket):
                                 session_id,
                                 gemini_ws,
                                 websocket,
-                                last_user_text=user_buf,
                                 camera_status=camera_status,
                                 frame_count=frame_count,
                             )
@@ -549,6 +588,7 @@ async def ws_session(websocket: WebSocket):
                     # Frame-diff nudge: only trigger when the scene actually changes
                     curr_bytes = base64.b64decode(raw_b64)
                     pstate = _get_perception_state(session_id)
+                    pstate["latest_frame_b64"] = raw_b64
 
                     if pstate["prev_frame_bytes"] and not ai_speaking:
                         diff = compute_frame_diff(pstate["prev_frame_bytes"], curr_bytes)
@@ -774,7 +814,6 @@ async def handle_tool_call(
     gemini_ws,
     client_ws,
     *,
-    last_user_text: str = "",
     camera_status: str = "unavailable",
     frame_count: int = 0,
 ):
@@ -789,10 +828,9 @@ async def handle_tool_call(
 
         result = {}
         if fn == "lookup_manual":
-            grounded, ground_reason = _manual_lookup_grounded(
+            grounded, ground_reason = await _confirm_manual_lookup_grounding(
                 args,
                 session_id,
-                last_user_text=last_user_text,
                 camera_status=camera_status,
                 frame_count=frame_count,
             )
@@ -806,7 +844,7 @@ async def handle_tool_call(
                     "block_reason": ground_reason,
                     "no_manual_instruction": (
                         "Do not open a manual yet. Tell the user you need to see the device clearly "
-                        "or hear the exact device name first. Do not guess the device."
+                        "on camera first. Do not guess the device."
                     ),
                 }
             else:
