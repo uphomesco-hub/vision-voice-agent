@@ -62,6 +62,7 @@ final class AgentSessionClient {
     private let playbackEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private var playbackConfigured = false
+    private var audioSessionConfigured = false
     private let transcriptMergeWindow: TimeInterval = 30
 
     init() {
@@ -121,6 +122,7 @@ final class AgentSessionClient {
         stopMicrophone(deactivateSession: true)
         stopCamera()
         stopPlayback()
+        audioSessionConfigured = false
         isRunning = false
         sessionID = nil
         setPhase(.idle, status: "Ready")
@@ -413,14 +415,23 @@ final class AgentSessionClient {
         }
         if !playbackEngine.isRunning {
             try? playbackEngine.start()
+            if !playerNode.isPlaying {
+                playerNode.play()
+            }
         }
     }
 
     private func configureSharedAudioSession() throws {
+        if audioSessionConfigured {
+            return
+        }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        try? session.setPreferredSampleRate(48_000)
+        try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
         try? session.overrideOutputAudioPort(.speaker)
+        audioSessionConfigured = true
     }
 
     private func stopPlayback() {
