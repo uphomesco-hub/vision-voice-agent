@@ -48,35 +48,29 @@ struct AgentRootView: View {
     }
 
     private var activeSessionScreen: some View {
-        GeometryReader { geometry in
-            VStack(spacing: 0) {
-                ZStack {
-                    cameraSurface
-                    activeTopBar
-                }
-                .frame(height: activeCameraHeight(in: geometry.size.height))
+        ZStack {
+            cameraSurface
+                .ignoresSafeArea()
 
-                activeControls
+            activeTopBar
 
-                if showTranscript {
-                    transcriptPanel
-                        .frame(height: activeTranscriptHeight(in: geometry.size.height))
+            if showTranscript {
+                VStack {
+                    Spacer()
+                    transcriptOverlay
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 86)
                 }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .background(Color.black)
-            .ignoresSafeArea(edges: .bottom)
-        }
-    }
 
-    private func activeCameraHeight(in totalHeight: CGFloat) -> CGFloat {
-        if showTranscript {
-            return max(300, totalHeight * 0.58)
+            VStack {
+                Spacer()
+                activeControls
+            }
         }
-        return max(420, totalHeight - 68)
-    }
-
-    private func activeTranscriptHeight(in totalHeight: CGFloat) -> CGFloat {
-        max(220, totalHeight - activeCameraHeight(in: totalHeight) - 68)
+        .background(Color.black)
+        .ignoresSafeArea()
     }
 
     private var header: some View {
@@ -115,7 +109,7 @@ struct AgentRootView: View {
                 settingsButton
             }
             .padding(.horizontal, 14)
-            .padding(.top, 14)
+            .padding(.top, 54)
             Spacer()
         }
     }
@@ -242,6 +236,63 @@ struct AgentRootView: View {
         }
     }
 
+    private var transcriptOverlay: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Conversation")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.46))
+                    .textCase(.uppercase)
+                Spacer()
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showTranscript = false
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 28, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.62))
+                .accessibilityLabel("Hide transcript")
+            }
+
+            compactTranscriptList
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: 230)
+        .background(.black.opacity(0.48), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    private var compactTranscriptList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(client.transcript.suffix(12)) { line in
+                        TranscriptRow(line: line)
+                            .id(line.id)
+                    }
+                }
+                .padding(.bottom, 2)
+            }
+            .scrollIndicators(.hidden)
+            .onChange(of: client.transcript.count) { _, _ in
+                guard let last = client.transcript.last else { return }
+                withAnimation(.easeOut(duration: 0.18)) {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+        }
+    }
+
     private var setupGuide: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
@@ -291,7 +342,6 @@ struct AgentRootView: View {
         ZStack {
             if client.cameraRunning {
                 CameraPreviewView(session: client.cameraSession)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .scaleEffect(x: client.cameraFacingFront ? -1 : 1, y: 1)
             } else {
                 VStack(spacing: 8) {
@@ -332,22 +382,8 @@ struct AgentRootView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 5)
                     .background(.black.opacity(0.62), in: Capsule())
-                    .padding(.bottom, 8)
+                    .padding(.bottom, showTranscript ? 330 : 108)
             }
-
-            VStack {
-                HStack {
-                    Spacer()
-                    Label(client.cameraRunning ? "Camera on" : "Camera off", systemImage: client.cameraRunning ? "video.fill" : "video.slash.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.55), in: Capsule())
-                }
-                Spacer()
-            }
-            .padding(10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
@@ -429,8 +465,9 @@ struct AgentRootView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color(red: 0.065, green: 0.065, blue: 0.07).opacity(0.94))
+        .padding(.top, 12)
+        .padding(.bottom, 30)
+        .background(.black.opacity(0.58))
     }
 
     private var startControls: some View {
@@ -569,22 +606,22 @@ private struct TranscriptRow: View {
     let line: AgentTranscriptLine
 
     var body: some View {
-        HStack(alignment: .top, spacing: 7) {
-            Text(label)
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white.opacity(0.52))
-                .frame(width: 28, alignment: .leading)
-                .padding(.top, 3)
-            Text(line.text)
-                .font(.system(size: 12))
-                .lineSpacing(2)
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        inlineText
+            .font(.system(size: 11))
+            .lineSpacing(1)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private var inlineText: Text {
+        Text(label)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.white.opacity(0.54))
+        + Text("  \(line.text)")
+            .foregroundStyle(textColor)
     }
 
     private var label: String {
@@ -592,7 +629,7 @@ private struct TranscriptRow: View {
         case "user":
             "YOU"
         case "system":
-            "SYSTEM"
+            "SYS"
         default:
             "AI"
         }
@@ -601,11 +638,11 @@ private struct TranscriptRow: View {
     private var background: Color {
         switch line.role {
         case "user":
-            Color.white.opacity(0.08)
+            Color.white.opacity(0.10)
         case "system":
             Color.clear
         default:
-            Color.white.opacity(0.04)
+            Color.white.opacity(0.06)
         }
     }
 
@@ -614,9 +651,9 @@ private struct TranscriptRow: View {
         case "system":
             .white.opacity(0.48)
         case "assistant":
-            .white
+            .white.opacity(0.88)
         default:
-            .white.opacity(0.76)
+            .white.opacity(0.74)
         }
     }
 }

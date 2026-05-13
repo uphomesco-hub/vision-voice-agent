@@ -62,7 +62,7 @@ final class AgentSessionClient {
     private let playbackEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private var playbackConfigured = false
-    private let transcriptMergeWindow: TimeInterval = 8
+    private let transcriptMergeWindow: TimeInterval = 30
 
     init() {
         backendBaseURL = defaults.string(forKey: AgentDefaults.backendBaseURLKey) ?? AgentDefaults.defaultBackendBaseURL
@@ -460,9 +460,9 @@ final class AgentSessionClient {
         let now = Date()
         if let lastIndex = transcript.indices.last,
            transcript[lastIndex].role == role,
-           !transcript[lastIndex].final,
            now.timeIntervalSince(transcript[lastIndex].createdAt) <= transcriptMergeWindow {
             transcript[lastIndex].text = mergeTranscriptText(transcript[lastIndex].text, cleaned)
+            transcript[lastIndex].final = false
         } else {
             transcript.append(AgentTranscriptLine(role: role, text: cleaned, createdAt: now))
         }
