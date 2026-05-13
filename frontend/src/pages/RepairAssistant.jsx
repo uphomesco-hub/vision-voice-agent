@@ -91,6 +91,18 @@ export default function RepairAssistant() {
     try { wsRef.current.send(JSON.stringify({ type: 'camera_status', state, reason })); } catch {}
   }, []);
 
+  const closeManual = useCallback(() => {
+    setActiveManual(null);
+    setWarnings([]);
+    setSteps([]);
+    setToolActivity(null);
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      try { wsRef.current.send(JSON.stringify({ type: 'manual.close' })); } catch {}
+    }
+    setStatus('Manual closed');
+    log('MANUAL', 'Closed');
+  }, []);
+
   // ─── WS Message Handler ──────────
   const handleMsg = useCallback((event) => {
     try {
@@ -130,11 +142,15 @@ export default function RepairAssistant() {
         } else if (msg.status === 'done') { log('TOOL', `${msg.tool} done:`, msg.result_summary);
           if (msg.tool === 'google_search') { setSearchQueries(msg.queries || []); setToolActivity({ tool: msg.tool, status: 'done', detail: `Searched: ${(msg.queries || []).join(', ')}` }); log('SEARCH', msg.queries);
           } else { if (msg.manual_id) { setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary }); setActiveManual({ id: msg.manual_id, summary: msg.result_summary }); log('MANUAL', msg.result_summary);
-          } else { setToolActivity({ tool: msg.tool, status: 'done', detail: 'No manual in database — using AI knowledge' }); setActiveManual(null); log('MANUAL', 'No manual found'); }
+          } else { setToolActivity({ tool: msg.tool, status: 'done', detail: msg.result_summary || (msg.blocked ? 'Manual not opened — device not confirmed' : 'No manual in database — using AI knowledge') }); setActiveManual(null); log('MANUAL', msg.blocked ? 'Lookup blocked' : 'No manual found'); }
           if (msg.warnings?.length) { setWarnings(msg.warnings); log('WARN', `${msg.warnings.length} warnings`); }
           if (msg.steps?.length) { setSteps(msg.steps); log('STEPS', `${msg.steps.length} steps`); } }
           setTimeout(() => setToolActivity(null), 4000);
         }
+      } else if (msg.type === 'manual.closed') {
+        setActiveManual(null); setWarnings([]); setSteps([]); setToolActivity(null);
+        setStatus(msg.message || 'Manual closed');
+        log('MANUAL', `Closed (${msg.reason || 'server'})`);
       } else if (msg.type === 'error') { log('ERROR', msg.message); if (msg.message.includes('disconnected')) setStatus('Reconnecting...'); else setStatus('Error: ' + msg.message);
       } else if (msg.type === 'vision.status') { log('VISION', msg.status); setVisionStatus(msg.status === 'analyzing' ? 'Analyzing...' : null); if (msg.status === 'analyzing') setTimeout(() => setVisionStatus(null), 3000);
       } else if (msg.type === 'step.update') { log('STEP', `→ step ${msg.step}`);
@@ -421,7 +437,7 @@ export default function RepairAssistant() {
             </div>
             {showTranscript && <div className="ra-info-section">
               {toolActivity && <div className={`ra-panel ra-tool-panel ${toolActivity.status}`} data-testid="tool-panel"><div className="ra-panel-title">{toolActivity.tool === 'google_search' ? 'Google Search' : 'Tool Activity'}</div><div className="ra-tool-detail">{toolActivity.detail}</div>{toolActivity.status === 'running' && <div className="ra-tool-spinner"></div>}</div>}
-              {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-title">Active Manual</div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
+              {activeManual && <div className="ra-panel ra-manual-panel" data-testid="manual-panel"><div className="ra-panel-header"><div className="ra-panel-title">Active Manual</div><button className="ra-panel-action" type="button" onClick={closeManual} data-testid="manual-close-button">Close</button></div><div className="ra-manual-summary">{activeManual.summary}</div></div>}
               {warnings.length > 0 && <div className="ra-panel ra-warnings-panel" data-testid="warnings-panel"><div className="ra-panel-title">Warnings</div>{warnings.slice(0, 3).map((w, i) => <div key={i} className="ra-warning-item">{w}</div>)}</div>}
               {steps.length > 0 && <div className="ra-panel ra-steps-panel" data-testid="steps-panel"><div className="ra-panel-title">Steps</div>{steps.map((s, i) => <div key={i} className="ra-step-item"><span className="ra-step-num">{s.step || i + 1}</span><div className="ra-step-content"><div className="ra-step-title">{s.title}</div>{s.action && <div className="ra-step-action">{s.action}</div>}</div></div>)}</div>}
               <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">

@@ -8,9 +8,10 @@ import json
 import os
 import base64
 import io
+import re
 import websockets
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 from PIL import Image
 
 from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
@@ -56,6 +57,119 @@ def _get_perception_state(sid: str) -> Dict[str, Any]:
 
 def _clear_perception_state(sid: str):
     _perception_cache.pop(sid, None)
+
+
+MANUAL_CLOSE_RE = re.compile(
+    r"\b(close|hide|dismiss|remove|clear|stop|cancel)\s+(the\s+)?manual\b|"
+    r"\bmanual\s+(close|hide|dismiss|remove|clear|stop|cancel)\b|"
+    r"\b(no|dont|don't)\s+(use\s+)?(the\s+)?manual\b",
+    re.IGNORECASE,
+)
+
+MANUAL_TERM_STOPWORDS = {
+    "a", "an", "and", "for", "from", "guide", "help", "how", "manual",
+    "model", "need", "of", "on", "repair", "the", "this", "to", "with",
+}
+
+
+def _manual_close_requested(text: str) -> bool:
+    return bool(text and MANUAL_CLOSE_RE.search(text))
+
+
+def _manual_lookup_terms(args: Dict[str, Any]) -> List[str]:
+    terms: List[str] = []
+    for key in ("brand", "model", "device_type", "query"):
+        value = str(args.get(key, "") or "").strip().lower()
+        if not value:
+            continue
+        terms.append(value)
+        terms.extend(
+            token
+            for token in re.findall(r"[a-z0-9][a-z0-9-]{2,}", value)
+            if token not in MANUAL_TERM_STOPWORDS
+        )
+    seen = set()
+    return [term for term in terms if not (term in seen or seen.add(term))]
+
+
+def _term_negated_in_text(text: str, term: str) -> bool:
+    for match in re.finditer(re.escape(term), text):
+        before = text[max(0, match.start() - 32):match.start()]
+        if re.search(r"\b(no|not|isnt|isn't|wasnt|wasn't|without|never)\b", before):
+            return True
+    return False
+
+
+def _manual_lookup_grounded(
+    args: Dict[str, Any],
+    session_id: str,
+    *,
+    last_user_text: str = "",
+    camera_status: str = "unavailable",
+    frame_count: int = 0,
+) -> Tuple[bool, str]:
+    terms = _manual_lookup_terms(args)
+    if not terms:
+        return False, "manual lookup had no named device terms"
+
+    user_text = (last_user_text or "").lower()
+    if user_text and any(term in user_text and not _term_negated_in_text(user_text, term) for term in terms):
+        return True, "user named the device"
+
+    if camera_status != "on" or frame_count <= 0:
+        return False, "camera is unavailable"
+
+    perception = (_get_perception_state(session_id).get("last_perception") or {})
+    confidence = float(perception.get("confidence", 0) or 0)
+    if confidence < 0.55:
+        return False, "no confident visual device confirmation"
+
+    visual_fields = [
+        perception.get("device_state", ""),
+        perception.get("focus_area", ""),
+        " ".join(str(x) for x in perception.get("visible_features", []) or []),
+        " ".join(str(x) for x in perception.get("changed_vs_prior", []) or []),
+    ]
+    visual_text = " ".join(visual_fields).lower()
+    if any(term in visual_text for term in terms):
+        return True, "visual perception confirmed the device"
+
+    return False, "requested manual terms were not visible"
+
+
+async def close_active_manual(session_id: str, client_ws: WebSocket, gemini_ws=None, reason: str = ""):
+    async with AsyncSessionLocal() as db:
+        await SessionStore.update_session(
+            db,
+            session_id,
+            active_manual_id=None,
+            active_device_type=None,
+            active_device_model=None,
+            current_step=0,
+        )
+
+    await client_ws.send_json({
+        "type": "manual.closed",
+        "message": "Manual closed.",
+        "reason": reason,
+    })
+
+    if gemini_ws:
+        await gemini_ws.send(json.dumps({
+            "clientContent": {
+                "turns": [{
+                    "role": "user",
+                    "parts": [{
+                        "text": (
+                            "[MANUAL_CLOSED] The active manual has been closed at the user's request. "
+                            "Continue the conversation normally without using that manual. "
+                            "Do not open another manual unless the user explicitly names a device or the camera visibly confirms one."
+                        )
+                    }],
+                }],
+                "turnComplete": True,
+            }
+        }))
 
 LOOKUP_MANUAL_DECL = {
     "name": "lookup_manual",
@@ -290,6 +404,7 @@ async def ws_session(websocket: WebSocket):
             nonlocal alive, ai_speaking
             user_buf = ""
             asst_buf = ""
+            manual_close_seen = False
             try:
                 async for raw_msg in gemini_ws:
                     if not alive:
@@ -300,7 +415,15 @@ async def ws_session(websocket: WebSocket):
                         # Tool call
                         tc = data.get("toolCall")
                         if tc:
-                            await handle_tool_call(tc, session_id, gemini_ws, websocket)
+                            await handle_tool_call(
+                                tc,
+                                session_id,
+                                gemini_ws,
+                                websocket,
+                                last_user_text=user_buf,
+                                camera_status=camera_status,
+                                frame_count=frame_count,
+                            )
                             continue
 
                         sc = data.get("serverContent")
@@ -323,6 +446,9 @@ async def ws_session(websocket: WebSocket):
                             user_buf += itx["text"]
                             nudge.user_spoke()
                             await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
+                            if not manual_close_seen and _manual_close_requested(user_buf):
+                                manual_close_seen = True
+                                await close_active_manual(session_id, websocket, gemini_ws, reason="voice request")
 
                         # Output transcription
                         otx = sc.get("outputTranscription")
@@ -366,6 +492,7 @@ async def ws_session(websocket: WebSocket):
                                             logger.info(f"[{session_id}] Step advanced to {new_step}")
                             user_buf = ""
                             asst_buf = ""
+                            manual_close_seen = False
 
                     except Exception as e:
                         logger.error(f"[{session_id}] Gemini msg err: {e}")
@@ -536,6 +663,8 @@ async def ws_session(websocket: WebSocket):
                 elif t == "text":
                     txt = msg.get("content", "")
                     if txt:
+                        if _manual_close_requested(txt):
+                            await close_active_manual(session_id, websocket, gemini_ws, reason="text request")
                         if camera_status != "on" or frame_count == 0:
                             txt = (
                                 "[CAMERA_STATUS: unavailable] No camera frame is currently available. "
@@ -546,6 +675,9 @@ async def ws_session(websocket: WebSocket):
                         await gemini_ws.send(json.dumps({
                             "clientContent": {"turns": [{"role": "user", "parts": [{"text": txt}]}], "turnComplete": True}
                         }))
+
+                elif t == "manual.close":
+                    await close_active_manual(session_id, websocket, gemini_ws, reason="client request")
 
                 elif t == "camera_status":
                     state = msg.get("state", "unavailable")
@@ -636,7 +768,16 @@ async def ws_session(websocket: WebSocket):
             _clear_perception_state(session_id)
 
 
-async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
+async def handle_tool_call(
+    tc,
+    session_id,
+    gemini_ws,
+    client_ws,
+    *,
+    last_user_text: str = "",
+    camera_status: str = "unavailable",
+    frame_count: int = 0,
+):
     calls = tc.get("functionCalls", [])
     responses = []
     for call in calls:
@@ -648,13 +789,34 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
 
         result = {}
         if fn == "lookup_manual":
-            async with AsyncSessionLocal() as db:
-                result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
-                if result.get("selected_manual_id"):
-                    await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
-                else:
-                    # No manual found — short instruction for Gemini
-                    result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training and Google Search."
+            grounded, ground_reason = _manual_lookup_grounded(
+                args,
+                session_id,
+                last_user_text=last_user_text,
+                camera_status=camera_status,
+                frame_count=frame_count,
+            )
+            if not grounded:
+                logger.warning(f"[{session_id}] lookup_manual blocked: {ground_reason}; args={args}")
+                result = {
+                    "found_count": 0,
+                    "selected_manual_id": None,
+                    "manual_summary": "Manual not opened — device was not confirmed.",
+                    "blocked": True,
+                    "block_reason": ground_reason,
+                    "no_manual_instruction": (
+                        "Do not open a manual yet. Tell the user you need to see the device clearly "
+                        "or hear the exact device name first. Do not guess the device."
+                    ),
+                }
+            else:
+                async with AsyncSessionLocal() as db:
+                    result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
+                    if result.get("selected_manual_id"):
+                        await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
+                    else:
+                        # No manual found — short instruction for Gemini
+                        result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training and Google Search."
         else:
             result = {"error": f"Unknown tool: {fn}"}
 
@@ -672,10 +834,11 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
         else:
             await client_ws.send_json({
                 "type": "tool.status", "tool": fn, "status": "done",
-                "result_summary": "No manual found — using general knowledge",
+                "result_summary": result.get("manual_summary") or "No manual found — using general knowledge",
                 "manual_id": None,
                 "warnings": [],
                 "steps": [],
+                "blocked": result.get("blocked", False),
             })
 
     await gemini_ws.send(json.dumps({
