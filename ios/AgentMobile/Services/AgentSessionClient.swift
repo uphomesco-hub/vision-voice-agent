@@ -719,7 +719,11 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
         guard !configured else { return }
 
         session.beginConfiguration()
-        session.sessionPreset = .medium
+        if session.canSetSessionPreset(.hd1920x1080) {
+            session.sessionPreset = .hd1920x1080
+        } else {
+            session.sessionPreset = .high
+        }
         defer { session.commitConfiguration() }
 
         try addInput(position: currentPosition)
@@ -764,8 +768,7 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
     }
 
     private func addInput(position: AVCaptureDevice.Position) throws {
-        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
-            AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
+        guard let device = Self.preferredCamera(for: position) else {
             throw NSError(domain: "CameraFrameStreamer", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera is available on this device."])
         }
 
@@ -775,6 +778,22 @@ private final class CameraFrameStreamer: NSObject, AVCaptureVideoDataOutputSampl
         }
         session.addInput(input)
         currentPosition = device.position == .unspecified ? position : device.position
+    }
+
+    private static func preferredCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        if position == .back {
+            return AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) ??
+                AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) ??
+                AVCaptureDevice.default(.builtInDualCamera, for: .video, position: .back) ??
+                AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        }
+
+        if position == .front {
+            return AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) ??
+                AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+        }
+
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
