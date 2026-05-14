@@ -66,6 +66,11 @@ final class AgentSessionClient {
     private var assistantAudioActive = false
     private var pendingPlaybackBuffers = 0
     private var suppressMicrophoneUntil = Date.distantPast
+    private var bargeInCandidateFrames = 0
+    private var dropAssistantAudioForBargeIn = false
+    private var lastBargeInAt = Date.distantPast
+    private let bargeInRMS: Float = 0.045
+    private let bargeInConsecutiveFrames = 2
     private let transcriptMergeWindow: TimeInterval = 30
 
     init() {
@@ -125,6 +130,8 @@ final class AgentSessionClient {
         stopMicrophone(deactivateSession: true)
         stopCamera()
         stopPlayback()
+        dropAssistantAudioForBargeIn = false
+        bargeInCandidateFrames = 0
         audioSessionConfigured = false
         isRunning = false
         sessionID = nil
@@ -267,6 +274,7 @@ final class AgentSessionClient {
         case "assistant.state":
             let state = object["state"] as? String
             if state == "listening" {
+                dropAssistantAudioForBargeIn = false
                 endAssistantAudioSuppressionIfIdle()
                 setPhase(.listening, status: "Listening...")
             } else if state == "speaking" {
@@ -295,17 +303,22 @@ final class AgentSessionClient {
                 await updateLiveActivity(status: statusText)
             }
         case "audio":
+            if dropAssistantAudioForBargeIn {
+                return
+            }
             if let encoded = object["data"] as? String {
                 playAudio(base64: encoded)
             }
         case "turn_complete":
             finalizeLatestTranscriptLine()
+            dropAssistantAudioForBargeIn = false
             endAssistantAudioSuppressionIfIdle()
             setPhase(.listening, status: microphoneRunning ? "Listening..." : "Microphone off")
             Task {
                 await updateLiveActivity(status: statusText)
             }
         case "interrupted":
+            dropAssistantAudioForBargeIn = false
             stopPlayback()
             setPhase(.listening, status: microphoneRunning ? "Listening..." : "Microphone off")
         case "error":
@@ -338,9 +351,15 @@ final class AgentSessionClient {
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
             guard let self else { return }
+            let rms = Self.rmsLevel(buffer: buffer)
             let pcmData = Self.makePCM16MonoData(buffer: buffer, sourceFormat: format, targetSampleRate: 16_000)
             guard !pcmData.isEmpty else { return }
             Task { @MainActor in
+                if self.shouldTriggerBargeIn(rms: rms) {
+                    self.handleLocalBargeIn()
+                    try? await self.sendJSON(["type": "audio", "data": pcmData.base64EncodedString()])
+                    return
+                }
                 guard self.shouldSendMicrophoneAudio else { return }
                 try? await self.sendJSON(["type": "audio", "data": pcmData.base64EncodedString()])
             }
@@ -447,16 +466,43 @@ final class AgentSessionClient {
         audioSessionConfigured = true
     }
 
-    private func stopPlayback() {
+    private func stopPlayback(resumeMicrophoneImmediately: Bool = false) {
         playerNode.stop()
         playbackEngine.stop()
         pendingPlaybackBuffers = 0
         assistantAudioActive = false
-        suppressMicrophoneUntil = Date().addingTimeInterval(0.3)
+        suppressMicrophoneUntil = resumeMicrophoneImmediately ? .distantPast : Date().addingTimeInterval(0.3)
     }
 
     private var shouldSendMicrophoneAudio: Bool {
         microphoneRunning && !assistantAudioActive && Date() >= suppressMicrophoneUntil
+    }
+
+    private func shouldTriggerBargeIn(rms: Float) -> Bool {
+        guard microphoneRunning, assistantAudioActive else {
+            bargeInCandidateFrames = 0
+            return false
+        }
+
+        guard Date().timeIntervalSince(lastBargeInAt) > 0.8 else {
+            return false
+        }
+
+        if rms >= bargeInRMS {
+            bargeInCandidateFrames += 1
+        } else {
+            bargeInCandidateFrames = 0
+        }
+
+        return bargeInCandidateFrames >= bargeInConsecutiveFrames
+    }
+
+    private func handleLocalBargeIn() {
+        dropAssistantAudioForBargeIn = true
+        lastBargeInAt = Date()
+        bargeInCandidateFrames = 0
+        stopPlayback(resumeMicrophoneImmediately: true)
+        setPhase(.listening, status: "Listening...")
     }
 
     private func beginAssistantAudioSuppression() {
@@ -561,6 +607,19 @@ final class AgentSessionClient {
             status: status,
             transcriptTail: transcript.last?.text ?? ""
         )
+    }
+
+    nonisolated private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Float {
+        guard let channel = buffer.floatChannelData?[0] else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+
+        var sum: Float = 0
+        for index in 0..<frameCount {
+            let sample = channel[index]
+            sum += sample * sample
+        }
+        return sqrt(sum / Float(frameCount))
     }
 
     nonisolated private static func makePCM16MonoData(buffer: AVAudioPCMBuffer, sourceFormat: AVAudioFormat, targetSampleRate: Double) -> Data {
