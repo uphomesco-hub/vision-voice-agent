@@ -1,255 +1,218 @@
-# Zeno AI - Step 1
+# Zeno AI
 
-A voice-first web application for device troubleshooting using Gemini Live API with Google Search grounding and LiveKit for realtime transport.
+Zeno AI is a live voice-and-vision repair assistant. It uses the camera as the source of truth, talks back in realtime, can look up internal repair manuals, and keeps the web and iOS clients pointed at the same backend.
 
-## Step 1 Features
+## Live Links
 
-✅ Voice-only interface (no camera/vision yet)
-✅ Gemini Live API with Google Search grounding
-✅ LiveKit for browser-to-agent realtime audio transport
-✅ SQLite persistence for sessions and turns
-✅ Personas and voice selection
-✅ Live transcript display
-✅ Cinematic "Sentinel" UI design
+- Web app / direct app link: https://vision-voice-agent.netlify.app/
+- Legacy app route: https://vision-voice-agent.netlify.app/repair redirects to `/`
+- Hosted backend: https://16-16-11-190.sslip.io
+- Backend health check: https://16-16-11-190.sslip.io/api/health
+- GitHub repo: https://github.com/uphomesco-hub/vision-voice-agent
+- iOS branch: https://github.com/uphomesco-hub/vision-voice-agent/tree/ios-agent-app
 
-## Prerequisites
+The current web root is the app itself, not a marketing landing page. It opens the Zeno AI session UI directly.
 
-- Python 3.10+
-- Node.js 16+ (for LiveKit server if needed)
-- Google API key with Gemini access (or Emergent Universal Key)
+## What Works Now
 
-## Environment Variables
+- Realtime voice session over WebSocket using Gemini Live.
+- Live camera frames from web and iOS.
+- Mobile web UI with camera, mic, transcript, tool/manual status, and camera flipping.
+- Native SwiftUI iOS app on the `ios-agent-app` branch.
+- iOS App Shortcut: "Start Zeno AI Agent".
+- iOS Back Tap flow through Shortcuts.
+- iOS Live Activities for Lock Screen and Dynamic Island.
+- Default iOS startup skips persona/voice selection and starts `calm-expert` with voice `Puck`.
+- Manual lookup for known devices, with backend safeguards so generic words like "trimmer" are not treated as visual proof.
+- Anti-hallucination camera handling: if no usable frame exists, Zeno should say it cannot see anything and ask for camera access or a better view.
+- English-only responses/transcripts from the app layer.
 
-Create `/app/backend/.env` with:
+## Repo Layout
 
+```text
+backend/   FastAPI backend, Gemini Live websocket bridge, prompts, manuals, session store
+frontend/  React web app deployed to Netlify
+ios/       SwiftUI iOS app, App Intent shortcut, Live Activity extension
+deploy/    systemd service files for the backend host
+docs/      AWS/Lightsail backend deployment notes
 ```
-# MongoDB (template default)
-MONGO_URL=mongodb://localhost:27017
-DB_NAME=test_database
+
+## Required Secrets
+
+Do not commit secrets. Keep them in backend environment variables or host/dashboard settings.
+
+Backend:
+
+```bash
+GOOGLE_API_KEY=your_gemini_key
 CORS_ORIGINS=*
-
-# LiveKit (local development)
-LIVEKIT_URL=ws://localhost:7880
-LIVEKIT_API_KEY=devkey
-LIVEKIT_API_SECRET=secret
-
-# Gemini API
-GOOGLE_API_KEY=your_google_api_key_here
-
-# Application
-AGENT_NAME=repair-assistant
-LOG_LEVEL=INFO
-MAX_SESSION_DURATION=3600
+PORT=8001
 ```
 
-## Local Setup Instructions
+Frontend:
 
-### 1. Install LiveKit Server
-
-**Option A: Homebrew (macOS)**
 ```bash
-brew install livekit
+REACT_APP_BACKEND_URL=https://16-16-11-190.sslip.io
 ```
 
-**Option B: Shell Script (Linux/macOS)**
-```bash
-curl -sSL https://get.livekit.io | bash
-```
+The frontend and iOS app may expose the backend URL. The Gemini key must stay only on the backend.
 
-**Option C: Download Binary**
-Download from https://github.com/livekit/livekit/releases
-
-### 2. Start LiveKit Server
+## Run Backend Locally
 
 ```bash
-livekit-server --dev
-```
-
-This starts the server with default credentials:
-- API Key: `devkey`
-- API Secret: `secret`
-- WebSocket URL: `ws://localhost:7880`
-
-### 3. Install Python Dependencies
-
-```bash
-cd /app/backend
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 4. Start Backend Server
-
-```bash
-cd /app/backend
+# create backend/.env with GOOGLE_API_KEY and any deploy-specific settings
 python server.py
 ```
 
-The FastAPI server will run on http://localhost:8001
+The backend runs on:
 
-### 5. Start Agent Worker
+```text
+http://127.0.0.1:8001
+```
 
-In a new terminal:
+Check it:
 
 ```bash
-cd /app/backend
-python agent.py dev
+curl http://127.0.0.1:8001/api/health
 ```
 
-The agent worker will connect to LiveKit and await dispatch.
+## Run Web App Locally
 
-### 6. Access the Application
-
-Open your browser to:
+```bash
+cd frontend
+yarn install
+REACT_APP_BACKEND_URL=http://127.0.0.1:8001 yarn start
 ```
-http://localhost:8001
+
+Open:
+
+```text
+http://localhost:3000
 ```
 
-## Usage Flow
+For hosted backend testing:
 
-1. **Select Persona**: Choose the assistant personality
-2. **Select Voice**: Choose the voice style
-3. **Start Session**: Click "Start Session" and grant microphone permission
-4. **Talk Naturally**: Speak to the assistant about your device problem
-5. **View Transcript**: See the conversation in real-time
-6. **End Session**: Click the end call button when done
+```bash
+REACT_APP_BACKEND_URL=https://16-16-11-190.sslip.io yarn start
+```
+
+Build:
+
+```bash
+cd frontend
+CI= yarn build
+```
+
+## Run iOS App
+
+1. Open `ios/VisionVoiceAgent.xcodeproj` in Xcode.
+2. Select the `AgentMobile` scheme.
+3. Configure your Apple Development Team for signing.
+4. Run on an iPhone or simulator.
+
+The iOS app defaults to:
+
+```text
+https://16-16-11-190.sslip.io
+```
+
+You can change the backend from the gear/settings button in the app.
+
+### iOS Shortcut and Back Tap
+
+The app exposes a `Start Zeno AI Agent` App Shortcut. To use Back Tap:
+
+1. Open iPhone Settings.
+2. Go to Accessibility > Touch > Back Tap.
+3. Choose Double Tap or Triple Tap.
+4. Select the Zeno AI shortcut.
+
+Siri phrase:
+
+```text
+Hey Siri, open my agent in Zeno AI
+```
+
+iOS deep link:
+
+```text
+visionvoiceagent://agent
+```
+
+## Deploy Frontend to Netlify
+
+Netlify build settings:
+
+```text
+Base directory: frontend
+Build command: CI= yarn build
+Publish directory: frontend/build
+```
+
+Required Netlify environment variable:
+
+```text
+REACT_APP_BACKEND_URL=https://16-16-11-190.sslip.io
+```
+
+Current production frontend:
+
+```text
+https://vision-voice-agent.netlify.app/
+```
+
+## Deploy Backend to EC2
+
+On the EC2 instance:
+
+```bash
+cd /opt/repair-assistant
+git fetch origin main
+git checkout main
+git pull --ff-only origin main
+git rev-parse --short HEAD
+cd backend
+source .venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart repair-assistant-backend
+sudo systemctl status repair-assistant-backend
+curl http://127.0.0.1:8001/api/health
+```
+
+If deploying the iOS branch backend changes before merging to `main`, replace `main` with `ios-agent-app`.
+
+Useful service files and notes:
+
+- `deploy/lightsail/repair-assistant-backend.service`
+- `docs/aws-lightsail-backend.md`
 
 ## API Endpoints
 
-### Health Check
-```
-GET /api/health
-```
-
-### List Personas
-```
-GET /api/personas
-```
-
-### List Voices
-```
-GET /api/voices
-```
-
-### Create Session
-```
+```text
+GET  /api/health
+GET  /api/personas
+GET  /api/voices
+GET  /api/sessions/{session_id}/state
 POST /api/sessions
-Body: { "persona_id": "calm-expert", "voice_id": "puck" }
-```
-
-### Get Session Token
-```
-POST /api/sessions/{session_id}/token
-```
-
-### Get Session State
-```
-GET /api/sessions/{session_id}/state
-```
-
-### End Session
-```
 POST /api/sessions/{session_id}/end
+WS   /api/ws/session
 ```
 
-## Architecture
+## Branches
 
-```
-Browser (HTML/CSS/JS)
-    ↓
-    ↓ HTTP/API calls
-    ↓
-FastAPI Backend (server.py)
-    ↓
-    ↓ Token generation
-    ↓
-LiveKit Server (local)
-    ↓
-    ↓ WebRTC audio
-    ↓
-Agent Worker (agent.py)
-    ↓
-    ↓ Gemini Live API
-    ↓
-Google Search Grounding
-```
+Current GitHub branches:
 
-## Database Schema
+- `main`
+- `ios-agent-app`
+- `local-model-stream-prd`
+- `testing-hud`
 
-### sessions
-- id (str, primary key)
-- persona_id (str)
-- voice_id (str)
-- status (str: active/ended)
-- room_name (str, unique)
-- created_at (datetime)
-- updated_at (datetime)
+## Notes
 
-### session_turns
-- id (str, primary key)
-- session_id (str)
-- role (str: user/assistant)
-- content (text)
-- timestamp (datetime)
-
-### session_snapshots
-- id (str, primary key)
-- session_id (str)
-- state_data (text/json)
-- timestamp (datetime)
-
-## Agent Behavior
-
-The agent in Step 1:
-- ✅ Listens to user speech via microphone
-- ✅ Transcribes using Gemini STT
-- ✅ Processes with Gemini Live model
-- ✅ Uses Google Search grounding for current information
-- ✅ Responds with natural speech
-- ❌ Cannot see the device (camera disabled)
-- ❌ Cannot access device manuals (no manual lookup)
-
-## Step 2 Roadmap
-
-The next step will add:
-- 📹 Camera input from browser
-- 👁️ Vision understanding with Gemini
-- 🔍 Semantic vision watcher for device state
-- 📚 Manual lookup tool
-- ⚠️ Warnings and repair observations panel
-- 🔧 Structured repair step guidance
-
-## Troubleshooting
-
-### Microphone not working
-- Ensure browser has microphone permission
-- Check browser console for errors
-- Verify microphone is not used by other apps
-
-### Cannot connect to LiveKit
-- Verify LiveKit server is running (`livekit-server --dev`)
-- Check LIVEKIT_URL in .env matches server address
-- Ensure no firewall blocks port 7880
-
-### Agent not responding
-- Check agent worker is running (`python agent.py dev`)
-- Verify GOOGLE_API_KEY is valid
-- Check agent logs for errors
-
-### No audio playback
-- Ensure speakers/headphones are connected
-- Check browser audio settings
-- Verify AudioContext is not blocked by browser
-
-## Tech Stack
-
-- **Backend**: Python 3.10+, FastAPI, SQLAlchemy
-- **Database**: SQLite with async support
-- **Frontend**: Plain HTML, CSS, JavaScript
-- **Realtime**: LiveKit (WebRTC)
-- **AI**: Gemini Live API with Google Search grounding
-- **Agent Framework**: livekit-agents
-- **Design**: Cinematic Sentinel aesthetic
-
-## License
-
-Internal development project.
+- Pushing backend code to GitHub does not update AWS by itself. The EC2 service must pull the commit and restart.
+- Pushing frontend code to `main` triggers Netlify if the site is connected to that branch.
+- Do not push `.env`, SSH keys, Gemini keys, AWS keys, local Xcode `xcuserdata`, or backend database files.
