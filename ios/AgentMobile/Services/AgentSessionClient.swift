@@ -63,6 +63,9 @@ final class AgentSessionClient {
     private let playerNode = AVAudioPlayerNode()
     private var playbackConfigured = false
     private var audioSessionConfigured = false
+    private var assistantAudioActive = false
+    private var pendingPlaybackBuffers = 0
+    private var suppressMicrophoneUntil = Date.distantPast
     private let transcriptMergeWindow: TimeInterval = 30
 
     init() {
@@ -264,8 +267,10 @@ final class AgentSessionClient {
         case "assistant.state":
             let state = object["state"] as? String
             if state == "listening" {
+                endAssistantAudioSuppressionIfIdle()
                 setPhase(.listening, status: "Listening...")
             } else if state == "speaking" {
+                beginAssistantAudioSuppression()
                 setPhase(.speaking, status: "Speaking...")
             } else if state == "connecting" {
                 setPhase(.connecting, status: "Connecting...")
@@ -295,6 +300,7 @@ final class AgentSessionClient {
             }
         case "turn_complete":
             finalizeLatestTranscriptLine()
+            endAssistantAudioSuppressionIfIdle()
             setPhase(.listening, status: microphoneRunning ? "Listening..." : "Microphone off")
             Task {
                 await updateLiveActivity(status: statusText)
@@ -334,7 +340,8 @@ final class AgentSessionClient {
             guard let self else { return }
             let pcmData = Self.makePCM16MonoData(buffer: buffer, sourceFormat: format, targetSampleRate: 16_000)
             guard !pcmData.isEmpty else { return }
-            Task {
+            Task { @MainActor in
+                guard self.shouldSendMicrophoneAudio else { return }
                 try? await self.sendJSON(["type": "audio", "data": pcmData.base64EncodedString()])
             }
         }
@@ -380,6 +387,7 @@ final class AgentSessionClient {
     private func playAudio(base64: String) {
         guard let data = Data(base64Encoded: base64), !data.isEmpty else { return }
         configurePlaybackIfNeeded()
+        beginAssistantAudioSuppression()
 
         let sampleCount = data.count / MemoryLayout<Int16>.size
         guard let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1),
@@ -398,7 +406,12 @@ final class AgentSessionClient {
             }
         }
 
-        playerNode.scheduleBuffer(buffer)
+        pendingPlaybackBuffers += 1
+        playerNode.scheduleBuffer(buffer) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.finishAssistantAudioBuffer()
+            }
+        }
         if !playerNode.isPlaying {
             playerNode.play()
         }
@@ -437,6 +450,33 @@ final class AgentSessionClient {
     private func stopPlayback() {
         playerNode.stop()
         playbackEngine.stop()
+        pendingPlaybackBuffers = 0
+        assistantAudioActive = false
+        suppressMicrophoneUntil = Date().addingTimeInterval(0.3)
+    }
+
+    private var shouldSendMicrophoneAudio: Bool {
+        microphoneRunning && !assistantAudioActive && Date() >= suppressMicrophoneUntil
+    }
+
+    private func beginAssistantAudioSuppression() {
+        assistantAudioActive = true
+        suppressMicrophoneUntil = Date().addingTimeInterval(0.8)
+    }
+
+    private func finishAssistantAudioBuffer() {
+        pendingPlaybackBuffers = max(pendingPlaybackBuffers - 1, 0)
+        if pendingPlaybackBuffers == 0 {
+            assistantAudioActive = false
+            suppressMicrophoneUntil = Date().addingTimeInterval(0.6)
+        }
+    }
+
+    private func endAssistantAudioSuppressionIfIdle() {
+        if pendingPlaybackBuffers == 0 {
+            assistantAudioActive = false
+            suppressMicrophoneUntil = Date().addingTimeInterval(0.6)
+        }
     }
 
     private func sendJSON(_ object: [String: Any]) async throws {
