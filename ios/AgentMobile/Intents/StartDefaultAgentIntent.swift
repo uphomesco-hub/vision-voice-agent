@@ -2,7 +2,7 @@ import AppIntents
 import Foundation
 
 struct StartDefaultAgentIntent: AppIntent {
-    static var title: LocalizedStringResource = "Start Vision Voice Agent"
+    static var title: LocalizedStringResource = "Start Zeno AI Agent"
     static var description = IntentDescription("Starts the default live agent session without asking for persona or voice.")
     static var openAppWhenRun = true
 
@@ -21,7 +21,7 @@ struct AgentAppShortcuts: AppShortcutsProvider {
                 "Open my agent in \(.applicationName)",
                 "Start my agent in \(.applicationName)",
                 "Open the agent in \(.applicationName)",
-                "Run Vision Voice in \(.applicationName)"
+                "Run Zeno AI in \(.applicationName)"
             ],
             shortTitle: "Open My Agent",
             systemImageName: "waveform.circle.fill"

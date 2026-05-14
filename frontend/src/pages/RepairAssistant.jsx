@@ -308,7 +308,7 @@ export default function RepairAssistant() {
             <span className="ra-live-text" data-testid="status-text">{status}</span>
           </div>
         </div>
-        <div className="ra-header-center"><h1 className="ra-app-title">Repair Assistant</h1></div>
+        <div className="ra-header-center"><h1 className="ra-app-title">Zeno AI</h1></div>
         <div className="ra-header-right">
           {sessionId && <span className="ra-session-id" data-testid="session-id">{sessionId.slice(0, 8)}</span>}
         </div>

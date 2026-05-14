@@ -1,5 +1,5 @@
 """
-LiveKit Agent Worker for Realtime Repair Assistant
+LiveKit Agent Worker for Zeno AI
 Step 1: Voice only with Gemini Live API + Google Search grounding
 """
 
@@ -82,5 +82,5 @@ async def entrypoint(ctx: JobContext):
     logger.info("Agent session ready and greeting sent")
 
 if __name__ == "__main__":
-    logger.info("🚀 Starting Repair Assistant Agent Worker with Gemini Live API...")
+    logger.info("Starting Zeno AI Agent Worker with Gemini Live API...")
     agents.cli.run_app(server)

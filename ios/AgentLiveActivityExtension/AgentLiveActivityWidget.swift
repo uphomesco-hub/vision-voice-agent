@@ -70,7 +70,7 @@ private struct LockScreenActivityView: View {
                 .foregroundStyle(Color(red: 0.95, green: 0.32, blue: 0.22))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Vision Voice")
+                Text("Zeno AI")
                     .font(.headline)
                 Text(context.state.status)
                     .font(.subheadline)

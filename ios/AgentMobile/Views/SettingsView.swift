@@ -20,7 +20,7 @@ struct SettingsView: View {
                 Section("Default Launch") {
                     LabeledContent("Persona", value: AgentDefaults.defaultPersonaName)
                     LabeledContent("Voice", value: AgentDefaults.defaultVoiceID)
-                    LabeledContent("Shortcut", value: "Start Vision Voice Agent")
+                    LabeledContent("Shortcut", value: "Start Zeno AI Agent")
                 }
             }
             .navigationTitle("Agent Settings")

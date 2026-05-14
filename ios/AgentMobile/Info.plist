@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Vision Voice</string>
+	<string>Zeno AI</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -32,9 +32,9 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Vision Voice uses the camera so the agent can inspect the repair scene.</string>
+	<string>Zeno AI uses the camera so the agent can inspect the repair scene.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Vision Voice uses the microphone for live voice sessions with the agent.</string>
+	<string>Zeno AI uses the microphone for live voice sessions with the agent.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

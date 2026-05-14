@@ -23,7 +23,7 @@ targets:
     info:
       path: AgentMobile/Info.plist
       properties:
-        CFBundleDisplayName: Vision Voice
+        CFBundleDisplayName: Zeno AI
         UILaunchScreen:
           UIColorName: LaunchBackground
         UIApplicationSceneManifest:
@@ -32,8 +32,8 @@ targets:
           - CFBundleURLName: co.uphomes.visionvoiceagent
             CFBundleURLSchemes:
               - visionvoiceagent
-        NSCameraUsageDescription: Vision Voice uses the camera so the agent can inspect the repair scene.
-        NSMicrophoneUsageDescription: Vision Voice uses the microphone for live voice sessions with the agent.
+        NSCameraUsageDescription: Zeno AI uses the camera so the agent can inspect the repair scene.
+        NSMicrophoneUsageDescription: Zeno AI uses the microphone for live voice sessions with the agent.
         NSSupportsLiveActivities: true
     entitlements:
       path: AgentMobile/AgentMobile.entitlements
@@ -54,7 +54,7 @@ targets:
     info:
       path: AgentLiveActivityExtension/Info.plist
       properties:
-        CFBundleDisplayName: Vision Voice Activity
+        CFBundleDisplayName: Zeno AI Activity
         NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension

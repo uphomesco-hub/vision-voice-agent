@@ -1,11 +1,11 @@
-# Vision Voice iOS
+# Zeno AI iOS
 
-SwiftUI iOS client for the existing Vision Voice backend.
+SwiftUI iOS client for the existing Zeno AI backend.
 
 ## What it adds
 
 - A native iOS app that starts the agent with the default persona `calm-expert` and voice `Puck`.
-- A `Start Vision Voice Agent` App Shortcut that opens the app directly into a running agent session. Assign it to iOS Back Tap from Settings > Accessibility > Touch > Back Tap.
+- A `Start Zeno AI Agent` App Shortcut that opens the app directly into a running agent session. Assign it to iOS Back Tap from Settings > Accessibility > Touch > Back Tap.
 - ActivityKit Live Activity support for the Lock Screen and Dynamic Island, with taps deep-linking back to the active agent session.
 
 ## Run locally

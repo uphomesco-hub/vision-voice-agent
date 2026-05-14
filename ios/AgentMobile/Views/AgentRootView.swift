@@ -77,7 +77,7 @@ struct AgentRootView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Vision Voice")
+                    Text("Zeno AI")
                         .font(.largeTitle.weight(.semibold))
                         .foregroundStyle(.white)
                     Text("Default agent: Marcus + Puck")
@@ -96,7 +96,7 @@ struct AgentRootView: View {
         VStack {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Vision Voice")
+                    Text("Zeno AI")
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.white)
                     Text(client.statusText)
@@ -318,7 +318,7 @@ struct AgentRootView: View {
 
             SetupStepRow(
                 title: "Siri",
-                detail: "Say: \"Hey Siri, open my agent in Vision Voice.\"",
+                detail: "Say: \"Hey Siri, open my agent in Zeno AI.\"",
                 isDone: client.shortcutSetupMarked || client.shortcutLaunchObserved,
                 doneLabel: client.shortcutLaunchObserved ? "Verified" : "Mark Done"
             ) {
@@ -351,7 +351,7 @@ struct AgentRootView: View {
                     Text("I can't see anything right now.")
                         .font(.headline)
                         .foregroundStyle(.white)
-                    Text(client.cameraError ?? "Turn on camera access in iPhone Settings for Vision Voice.")
+                    Text(client.cameraError ?? "Turn on camera access in iPhone Settings for Zeno AI.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.62))
                         .multilineTextAlignment(.center)

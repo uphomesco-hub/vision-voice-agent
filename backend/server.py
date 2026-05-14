@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Server shutting down")
 
-app = FastAPI(title="Repair Assistant", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Zeno AI", version="2.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # ─── REST API ───────────────────────────
