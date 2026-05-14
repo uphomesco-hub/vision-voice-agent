@@ -8,6 +8,7 @@ import json
 import os
 import base64
 import io
+import re
 import websockets
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
@@ -230,6 +231,7 @@ async def ws_session(websocket: WebSocket):
         full_prompt += (
             "\n\nCAMERA AVAILABILITY: At session start no camera frame has been received yet. "
             "Until you receive image frames, do not claim you can see the scene. "
+            "A later camera-on status only means the camera transport is available; it does not prove any specific object is visible. "
             "If the user asks what you see before frames arrive, say: "
             "\"I can't see anything right now — please turn on the camera or check camera access in settings.\""
         )
@@ -300,7 +302,17 @@ async def ws_session(websocket: WebSocket):
                         # Tool call
                         tc = data.get("toolCall")
                         if tc:
-                            await handle_tool_call(tc, session_id, gemini_ws, websocket)
+                            await handle_tool_call(
+                                tc,
+                                session_id,
+                                gemini_ws,
+                                websocket,
+                                {
+                                    "camera_status": camera_status,
+                                    "frame_count": frame_count,
+                                    "last_perception": _get_perception_state(session_id).get("last_perception"),
+                                },
+                            )
                             continue
 
                         sc = data.get("serverContent")
@@ -560,7 +572,10 @@ async def ws_session(websocket: WebSocket):
                         "Do not guess."
                     )
                     if state == "on":
-                        status_text = "[CAMERA_STATUS: on] Camera frames are available. Only describe what is visible in the current frame."
+                        status_text = (
+                            "[CAMERA_STATUS: on] Camera frames may be available now, but this does not prove any specific object is visible. "
+                            "Only describe objects that are visible in the current frame."
+                        )
                     if reason:
                         status_text += f" Reason: {reason}"
                     await gemini_ws.send(json.dumps({
@@ -636,7 +651,53 @@ async def ws_session(websocket: WebSocket):
             _clear_perception_state(session_id)
 
 
-async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
+GENERIC_MANUAL_TERMS = {
+    "device", "thing", "machine", "tool", "repair", "manual", "guide", "help",
+    "issue", "problem", "not", "working", "broken", "turn", "on", "off",
+}
+
+
+def _manual_lookup_block_reason(args: Dict[str, Any], camera_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    brand = str(args.get("brand") or "").strip()
+    model = str(args.get("model") or "").strip()
+    device_type = str(args.get("device_type") or "").strip()
+    query = str(args.get("query") or "").strip()
+
+    # A specific brand/model can be looked up from the user's words alone.
+    if model or (brand and len(brand) >= 3):
+        return None
+
+    context = camera_context or {}
+    if context.get("camera_status") != "on" or int(context.get("frame_count") or 0) <= 0:
+        return "No usable camera frame has been received yet."
+
+    observation = context.get("last_perception") or {}
+    confidence = float(observation.get("confidence") or 0)
+    if confidence < 0.5:
+        return "The current camera view has not confidently confirmed a device."
+
+    requested_text = " ".join([device_type, query]).lower()
+    requested_terms = {
+        term
+        for term in re.findall(r"[a-z0-9]+", requested_text)
+        if len(term) >= 4 and term not in GENERIC_MANUAL_TERMS
+    }
+    if not requested_terms:
+        return "The manual request did not include a visually confirmed device or a specific model."
+
+    visible_text = " ".join([
+        str(observation.get("device_state") or ""),
+        " ".join(str(item) for item in observation.get("objects") or []),
+        " ".join(str(item) for item in observation.get("visible_features") or []),
+    ]).lower()
+
+    if not any(term in visible_text for term in requested_terms):
+        return "The requested device is not visible in the current camera observation."
+
+    return None
+
+
+async def handle_tool_call(tc, session_id, gemini_ws, client_ws, camera_context: Optional[Dict[str, Any]] = None):
     calls = tc.get("functionCalls", [])
     responses = []
     for call in calls:
@@ -648,13 +709,25 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
 
         result = {}
         if fn == "lookup_manual":
-            async with AsyncSessionLocal() as db:
-                result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
-                if result.get("selected_manual_id"):
-                    await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
-                else:
-                    # No manual found — short instruction for Gemini
-                    result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training and Google Search."
+            block_reason = _manual_lookup_block_reason(args, camera_context)
+            if block_reason:
+                result = {
+                    "selected_manual_id": None,
+                    "blocked_reason": block_reason,
+                    "manual_summary": "Manual lookup blocked until the device is visually confirmed or a model number is provided.",
+                    "instruction": (
+                        "Do not say you see this device. Tell the user you do not see it clearly right now, "
+                        "then ask them to point the camera at it or tell you the model number."
+                    ),
+                }
+            else:
+                async with AsyncSessionLocal() as db:
+                    result = await lookup_manual_tool(db, session_id, brand=args.get("brand", ""), model=args.get("model", ""), device_type=args.get("device_type", ""), issue=args.get("issue", ""), query=args.get("query", ""))
+                    if result.get("selected_manual_id"):
+                        await SessionStore.update_session(db, session_id, active_manual_id=result["selected_manual_id"], active_device_type=args.get("device_type", ""), active_device_model=args.get("model", ""))
+                    else:
+                        # No manual found — short instruction for Gemini
+                        result["no_manual_instruction"] = "No manual found. Tell the user briefly: 'No manual for this one — I'll use general knowledge and web search.' Then help using your training + Google Search."
         else:
             result = {"error": f"Unknown tool: {fn}"}
 
@@ -670,9 +743,10 @@ async def handle_tool_call(tc, session_id, gemini_ws, client_ws):
                 "steps": result.get("troubleshooting_steps", [])[:5],
             })
         else:
+            result_summary = result.get("manual_summary") or "No manual found — using general knowledge"
             await client_ws.send_json({
                 "type": "tool.status", "tool": fn, "status": "done",
-                "result_summary": "No manual found — using general knowledge",
+                "result_summary": result_summary,
                 "manual_id": None,
                 "warnings": [],
                 "steps": [],

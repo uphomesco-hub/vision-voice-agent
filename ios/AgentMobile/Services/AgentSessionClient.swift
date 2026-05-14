@@ -177,7 +177,6 @@ final class AgentSessionClient {
         guard isRunning, cameraRunning else { return }
         do {
             cameraFacingFront = try await cameraStreamer.flipCamera()
-            await sendCameraStatus("on", reason: cameraFacingFront ? "Camera switched to front." : "Camera switched to back.")
         } catch {
             let message = error.localizedDescription
             cameraError = message
@@ -386,7 +385,6 @@ final class AgentSessionClient {
             cameraRunning = true
             cameraError = nil
             cameraFacingFront = cameraStreamer.isFrontCamera
-            await sendCameraStatus("on")
         } catch {
             let message = error.localizedDescription
             cameraRunning = false
