@@ -1,5 +1,5 @@
 [Unit]
-Description=Repair Assistant FastAPI backend
+Description=Zeno AI FastAPI backend
 After=network.target
 
 [Service]

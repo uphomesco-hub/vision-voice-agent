@@ -1,4 +1,4 @@
-# Realtime Repair Assistant - Step 1
+# Zeno AI - Step 1
 
 A voice-first web application for device troubleshooting using Gemini Live API with Google Search grounding and LiveKit for realtime transport.
 

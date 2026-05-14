@@ -1,4 +1,4 @@
-# Design Guidelines — Repair Assistant
+# Design Guidelines — Zeno AI
 
 ## Design System: Cal.com Dark Adaptation
 Monochromatic dark design inspired by Cal.com's grayscale system.

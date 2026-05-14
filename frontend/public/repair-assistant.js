@@ -1,5 +1,5 @@
 /**
- * Repair Assistant - Frontend Application
+ * Zeno AI - Frontend Application
  * Step 1: Voice-only with LiveKit and Gemini Live
  */
 
@@ -35,7 +35,7 @@ const elements = {
 
 // Initialize app
 async function init() {
-    console.log('Initializing Repair Assistant...');
+    console.log('Initializing Zeno AI...');
     
     try {
         // Load personas and voices
