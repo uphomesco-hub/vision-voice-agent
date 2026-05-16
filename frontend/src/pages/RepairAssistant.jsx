@@ -151,6 +151,9 @@ export default function RepairAssistant() {
   }), [handleMsg]);
 
   const startMic = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone access is not available in this browser.');
+    }
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         sampleRate: 16000,
@@ -232,10 +235,16 @@ export default function RepairAssistant() {
       setTranscript([{ role: 'system', text: 'Session started. Ask a coding question out loud.', final: true }]);
     } catch (e) {
       sessionActiveRef.current = false;
-      setStatus(`Error: ${e.message}`);
       stopMic();
-      wsRef.current?.close();
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+      }
       wsRef.current = null;
+      setIsConnected(false);
+      setSessionId(null);
+      sessionIdRef.current = null;
+      setStatus(`Error: ${e.message}`);
     }
   };
 
