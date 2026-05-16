@@ -4,16 +4,11 @@ import './RepairAssistant.css';
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
 const API = BACKEND_URL ? `${BACKEND_URL}/api` : '';
 const WS_BASE = BACKEND_URL ? BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://') : '';
+const AUDIO_SAMPLE_RATE = 24000;
 
 function log(cat, ...args) {
   const ts = new Date().toISOString().slice(11, 23);
   console.log(`%c[${ts}] [${cat}]`, 'color: #ff6b5a; font-weight: bold', ...args);
-}
-
-function u8ToB64(bytes) {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
 }
 
 export default function RepairAssistant() {
@@ -44,13 +39,14 @@ export default function RepairAssistant() {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [transcript]);
 
-  const appendTranscript = useCallback((role, text, final = false) => {
-    if (!text) return;
+  const appendTranscript = useCallback((role, text, final = false, replace = false) => {
     setTranscript(prev => {
       const last = prev[prev.length - 1];
-      if (last && last.role === role && !last.final && !final) {
-        return [...prev.slice(0, -1), { ...last, text: `${last.text}${text}` }];
+      if (last && last.role === role && !last.final) {
+        const nextText = replace ? (text || last.text) : `${last.text}${text || ''}`;
+        return [...prev.slice(0, -1), { ...last, text: nextText, final }];
       }
+      if (!text) return prev;
       return [...prev, { role, text, final }];
     });
   }, []);
@@ -72,7 +68,7 @@ export default function RepairAssistant() {
       } else if (msg.type === 'assistant.state') {
         setVoiceState(msg.state === 'connecting' ? 'thinking' : msg.state);
       } else if (msg.type === 'transcription') {
-        appendTranscript(msg.role, msg.text, Boolean(msg.final));
+        appendTranscript(msg.role, msg.text, Boolean(msg.final), Boolean(msg.replace));
       } else if (msg.type === 'turn_complete') {
         setVoiceState('listening');
         setStatus('Listening for a coding question...');
@@ -98,6 +94,7 @@ export default function RepairAssistant() {
 
   const connectWS = useCallback(() => new Promise((resolve, reject) => {
     const ws = new WebSocket(`${WS_BASE}/api/ws/session`);
+    ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
     const timeout = setTimeout(() => {
       ws.onopen = null;
@@ -173,7 +170,7 @@ export default function RepairAssistant() {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          sampleRate: 16000,
+          sampleRate: AUDIO_SAMPLE_RATE,
           channelCount: 1,
           echoCancellation: true,
           noiseSuppression: true,
@@ -182,22 +179,32 @@ export default function RepairAssistant() {
       });
       micStreamRef.current = stream;
 
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE });
       audioCtxRef.current = ctx;
+      await ctx.audioWorklet.addModule(new URL('pcm-worklet.js', window.location.href).toString());
       const src = ctx.createMediaStreamSource(stream);
-      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      const proc = new AudioWorkletNode(ctx, 'pcm-capture-processor', {
+        processorOptions: {
+          chunkSize: 480,
+          vadThreshold: 0.012,
+          silenceMs: 360,
+          minSpeechMs: 160,
+          sampleRate: ctx.sampleRate || AUDIO_SAMPLE_RATE,
+        },
+      });
       const silentGain = ctx.createGain();
       silentGain.gain.value = 0;
 
-      proc.onaudioprocess = (event) => {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        const input = event.inputBuffer.getChannelData(0);
-        const pcm = new Int16Array(input.length);
-        for (let i = 0; i < input.length; i += 1) {
-          pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
-        }
+      proc.port.onmessage = (event) => {
+        const { type, pcm } = event.data || {};
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
         try {
-          wsRef.current.send(JSON.stringify({ type: 'audio', data: u8ToB64(new Uint8Array(pcm.buffer)) }));
+          if (type === 'audio' && pcm) {
+            ws.send(pcm);
+          } else if (type === 'speech_end') {
+            ws.send(JSON.stringify({ type: 'audio.commit' }));
+          }
         } catch {}
       };
 
@@ -218,6 +225,10 @@ export default function RepairAssistant() {
 
   const stopMic = useCallback(() => {
     micStartingRef.current = false;
+    try {
+      processorRef.current?.port?.postMessage({ type: 'stop' });
+      processorRef.current?.port?.close?.();
+    } catch {}
     processorRef.current?.disconnect();
     processorRef.current = null;
     audioCtxRef.current?.close();

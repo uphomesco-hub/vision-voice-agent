@@ -14,7 +14,7 @@ import httpx
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from collections import Counter
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, AsyncIterator
 from PIL import Image
 
 from db import init_db, get_db, AsyncSessionLocal, SessionSnapshot
@@ -34,7 +34,21 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
 MODEL_ID = os.environ.get("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
-CODING_HELPER_TEXT_MODEL = os.environ.get("CODING_HELPER_TEXT_MODEL", "gemini-2.5-flash")
+CODING_HELPER_TEXT_MODEL = os.environ.get("CODING_HELPER_TEXT_MODEL", "gemini-3.1-flash-lite")
+CODING_HELPER_FALLBACK_TEXT_MODEL = os.environ.get("CODING_HELPER_FALLBACK_TEXT_MODEL", "gemini-3-flash-preview")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_REALTIME_STT_URL = os.environ.get(
+    "OPENAI_REALTIME_STT_URL",
+    "wss://api.openai.com/v1/realtime?intent=transcription",
+)
+OPENAI_REALTIME_TRANSCRIPTION_MODEL = os.environ.get(
+    "OPENAI_REALTIME_TRANSCRIPTION_MODEL",
+    "gpt-realtime-whisper",
+)
+CODING_HELPER_STT_SAMPLE_RATE = int(os.environ.get("CODING_HELPER_STT_SAMPLE_RATE", "24000"))
+CODING_HELPER_STT_SILENCE_MS = int(os.environ.get("CODING_HELPER_STT_SILENCE_MS", "420"))
+CODING_HELPER_STT_VAD_THRESHOLD = float(os.environ.get("CODING_HELPER_STT_VAD_THRESHOLD", "0.45"))
+CODING_HELPER_CLIENT_VAD_COMMIT = os.environ.get("CODING_HELPER_CLIENT_VAD_COMMIT", "1").lower() not in {"0", "false", "no"}
 INPUT_SAMPLE_RATE = 16000
 GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
 
@@ -264,10 +278,7 @@ def _format_coding_helper_history(turns: List[Any]) -> str:
     return "\n".join(lines)
 
 
-async def _generate_coding_helper_answer(user_text: str, turns: List[Any], timeout: float = 12.0) -> str:
-    if not GEMINI_API_KEY:
-        return "Backend is missing `GOOGLE_API_KEY`, so I cannot generate the answer right now."
-
+def _build_coding_helper_answer_payload(user_text: str, turns: List[Any]) -> Dict[str, Any]:
     history = _format_coding_helper_history(turns)
     history_block = f"\n\nRecent chat context:\n{history}" if history else ""
     prompt = (
@@ -277,7 +288,7 @@ async def _generate_coding_helper_answer(user_text: str, turns: List[Any], timeo
         "Answer now. Keep it concise, direct, and interview-acceptable. "
         "If the transcription is awkward but clearly asks a simple definition, repair it silently and answer the intended question."
     )
-    payload = {
+    return {
         "contents": [{
             "role": "user",
             "parts": [{"text": prompt}],
@@ -288,6 +299,66 @@ async def _generate_coding_helper_answer(user_text: str, turns: List[Any], timeo
             "maxOutputTokens": 520,
         },
     }
+
+
+def _extract_gemini_text_chunk(data: Dict[str, Any]) -> str:
+    chunks: List[str] = []
+    for candidate in data.get("candidates", []) or []:
+        content = candidate.get("content") or {}
+        for part in content.get("parts", []) or []:
+            text = part.get("text")
+            if text:
+                chunks.append(text)
+    return "".join(chunks)
+
+
+async def _stream_coding_helper_answer(user_text: str, turns: List[Any], timeout: float = 20.0) -> AsyncIterator[str]:
+    if not GEMINI_API_KEY:
+        yield "Backend is missing `GOOGLE_API_KEY`, so I cannot generate the answer right now."
+        return
+
+    payload = _build_coding_helper_answer_payload(user_text, turns)
+    models = [CODING_HELPER_TEXT_MODEL]
+    if CODING_HELPER_FALLBACK_TEXT_MODEL and CODING_HELPER_FALLBACK_TEXT_MODEL not in models:
+        models.append(CODING_HELPER_FALLBACK_TEXT_MODEL)
+
+    last_error: Optional[Exception] = None
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={GEMINI_API_KEY}"
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, read=timeout)) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        raw_data = line[5:].strip()
+                        if not raw_data or raw_data == "[DONE]":
+                            continue
+                        try:
+                            chunk = _extract_gemini_text_chunk(json.loads(raw_data))
+                        except json.JSONDecodeError:
+                            logger.debug("Skipping malformed Gemini stream line")
+                            continue
+                        if chunk:
+                            yield chunk
+            return
+        except httpx.HTTPStatusError as exc:
+            last_error = exc
+            logger.warning(f"coding helper stream failed for {model}: {exc.response.status_code} {exc.response.text[:180]}")
+        except Exception as exc:
+            last_error = exc
+            logger.warning(f"coding helper stream failed for {model}: {exc}")
+
+    logger.error(f"coding helper streaming answer failed after fallbacks: {last_error}")
+    yield "I hit an answer-generation error. Please ask that once more."
+
+
+async def _generate_coding_helper_answer(user_text: str, turns: List[Any], timeout: float = 12.0) -> str:
+    if not GEMINI_API_KEY:
+        return "Backend is missing `GOOGLE_API_KEY`, so I cannot generate the answer right now."
+
+    payload = _build_coding_helper_answer_payload(user_text, turns)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{CODING_HELPER_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -575,6 +646,297 @@ async def get_full_transcript(sid: str, db: AsyncSession = Depends(get_db)):
 
 app.include_router(api)
 
+
+async def run_coding_helper_session(
+    websocket: WebSocket,
+    *,
+    session_id: str,
+    resume_id: Optional[str],
+    language: str,
+) -> bool:
+    """Run the low-latency coding helper lane without touching the vision agent path."""
+    if resume_id:
+        async with AsyncSessionLocal() as db:
+            state = await SessionStore.get_session_state(db, session_id)
+            if state:
+                await websocket.send_json({"type": "session.state", "data": state})
+
+    if not OPENAI_API_KEY:
+        await websocket.send_json({"type": "error", "message": "Backend is missing OPENAI_API_KEY for realtime transcription."})
+        await websocket.send_json({"type": "assistant.state", "state": "idle"})
+        await websocket.send_json({"type": "status", "message": "OpenAI STT key missing"})
+        return False
+
+    openai_ws = None
+    recv_openai_task: Optional[asyncio.Task] = None
+    answer_task: Optional[asyncio.Task] = None
+    alive = True
+    intentional_end = False
+    answer_seq = 0
+    last_assistant_answer = ""
+    item_buffers: Dict[str, str] = {}
+
+    async def cancel_answer_for_interruption():
+        nonlocal answer_seq, answer_task
+        if answer_task and not answer_task.done():
+            answer_seq += 1
+            answer_task.cancel()
+            await websocket.send_json({"type": "interrupted"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "status", "message": "Listening for the new question..."})
+
+    async def answer_and_stream(seq: int, user_text: str, prior_turns: List[Any]):
+        nonlocal last_assistant_answer
+        full_answer = ""
+        try:
+            async for chunk in _stream_coding_helper_answer(user_text, prior_turns):
+                if not alive or seq != answer_seq:
+                    return
+                full_answer += chunk
+                await websocket.send_json({"type": "transcription", "role": "assistant", "text": chunk, "final": False})
+
+            if not alive or seq != answer_seq:
+                return
+
+            final_answer = _clean_assistant_answer(full_answer) or "I heard the question, but I could not form a useful answer. Please ask it once more."
+            await websocket.send_json({"type": "transcription", "role": "assistant", "text": final_answer, "final": True, "replace": True})
+            last_assistant_answer = final_answer
+            async with AsyncSessionLocal() as db:
+                await SessionStore.add_turn(db, session_id, "assistant", final_answer)
+            await websocket.send_json({"type": "turn_complete"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"[{session_id}] coding streaming answer failed: {exc}")
+            if alive and seq == answer_seq:
+                await websocket.send_json({"type": "error", "message": "Answer generation failed. Please ask again."})
+                await websocket.send_json({"type": "turn_complete"})
+                await websocket.send_json({"type": "assistant.state", "state": "listening"})
+
+    async def handle_completed_user_turn(raw_text: str, *, replace_transcript: bool):
+        nonlocal answer_seq, answer_task
+        user_text = _clean_voice_text(raw_text)
+        if not user_text:
+            return
+
+        await websocket.send_json({
+            "type": "transcription",
+            "role": "user",
+            "text": user_text,
+            "final": True,
+            "replace": replace_transcript,
+        })
+
+        is_recitation, metrics = _is_probable_answer_recitation(user_text, last_assistant_answer)
+        is_actionable = _is_question_or_coding_request(user_text)
+
+        if is_recitation:
+            logger.info(f"[{session_id}] Suppressed likely answer recitation: metrics={metrics} text={user_text[:120]!r}")
+            await websocket.send_json({"type": "recitation.ignored"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "status", "message": "Listening..."})
+            return
+
+        if not is_actionable:
+            logger.info(f"[{session_id}] Suppressed non-question voice turn: {user_text[:120]!r}")
+            await websocket.send_json({"type": "non_question.ignored"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+            return
+
+        await websocket.send_json({"type": "assistant.state", "state": "thinking"})
+        await websocket.send_json({"type": "status", "message": "Answering..."})
+        async with AsyncSessionLocal() as db:
+            prior_turns = await SessionStore.get_turns(db, session_id, limit=12)
+            await SessionStore.add_turn(db, session_id, "user", user_text)
+
+        answer_seq += 1
+        if answer_task and not answer_task.done():
+            answer_task.cancel()
+        answer_task = asyncio.create_task(answer_and_stream(answer_seq, user_text, prior_turns))
+
+    async def recv_openai():
+        nonlocal alive
+        try:
+            async for raw_msg in openai_ws:
+                if not alive:
+                    break
+                try:
+                    data = json.loads(raw_msg)
+                    event_type = data.get("type")
+
+                    if event_type == "error":
+                        error = data.get("error") or {}
+                        message = str(error.get("message") or "OpenAI realtime transcription error")
+                        if "empty" in message.lower() and "buffer" in message.lower():
+                            logger.debug(f"[{session_id}] Ignoring empty local VAD commit: {message}")
+                            continue
+                        logger.error(f"[{session_id}] OpenAI STT error: {message}")
+                        await websocket.send_json({"type": "error", "message": message})
+                        continue
+
+                    if event_type == "input_audio_buffer.speech_started":
+                        await cancel_answer_for_interruption()
+                        await websocket.send_json({"type": "assistant.state", "state": "listening"})
+                        await websocket.send_json({"type": "status", "message": "Listening..."})
+                        continue
+
+                    if event_type == "input_audio_buffer.speech_stopped":
+                        await websocket.send_json({"type": "status", "message": "Transcribing..."})
+                        continue
+
+                    if event_type == "conversation.item.input_audio_transcription.delta":
+                        item_id = data.get("item_id") or "current"
+                        delta = data.get("delta") or ""
+                        if delta:
+                            item_buffers[item_id] = f"{item_buffers.get(item_id, '')}{delta}"
+                            await websocket.send_json({"type": "transcription", "role": "user", "text": delta, "final": False})
+                        continue
+
+                    if event_type == "conversation.item.input_audio_transcription.completed":
+                        item_id = data.get("item_id") or "current"
+                        transcript = data.get("transcript") or item_buffers.get(item_id, "")
+                        item_buffers.pop(item_id, None)
+                        await handle_completed_user_turn(transcript, replace_transcript=True)
+                        continue
+
+                    if event_type == "session.updated":
+                        logger.info(f"[{session_id}] OpenAI STT ready ({OPENAI_REALTIME_TRANSCRIPTION_MODEL})")
+                        await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+                        continue
+                except Exception as exc:
+                    logger.error(f"[{session_id}] OpenAI STT msg err: {exc}")
+        except websockets.exceptions.ConnectionClosedError as exc:
+            alive = False
+            logger.error(f"[{session_id}] OpenAI STT closed: {exc}")
+            try:
+                await websocket.send_json({"type": "error", "message": "Realtime transcription disconnected."})
+            except Exception:
+                pass
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        logger.info(f"[{session_id}] Connecting OpenAI realtime STT")
+        openai_ws = await websockets.connect(
+            OPENAI_REALTIME_STT_URL,
+            additional_headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "OpenAI-Beta": "realtime=v1",
+                "OpenAI-Safety-Identifier": session_id,
+            },
+            ping_interval=30,
+            ping_timeout=60,
+            close_timeout=5,
+            max_size=16 * 1024 * 1024,
+        )
+        setup_payload = {
+            "type": "session.update",
+            "session": {
+                "type": "transcription",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": CODING_HELPER_STT_SAMPLE_RATE},
+                        "transcription": {
+                            "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+                            "language": "en" if language.lower().startswith("en") else language.split("-")[0],
+                            "prompt": "Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2, API, backend, frontend, deployment, branch, and terminal commands.",
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": CODING_HELPER_STT_VAD_THRESHOLD,
+                            "prefix_padding_ms": 240,
+                            "silence_duration_ms": CODING_HELPER_STT_SILENCE_MS,
+                        },
+                    }
+                },
+            },
+        }
+        await openai_ws.send(json.dumps(setup_payload))
+        recv_openai_task = asyncio.create_task(recv_openai())
+
+        await websocket.send_json({"type": "assistant.state", "state": "listening"})
+        await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+
+        while alive:
+            try:
+                inbound = await asyncio.wait_for(websocket.receive(), timeout=900)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "error", "message": "Session timeout (15 min idle)"})
+                break
+
+            if inbound.get("type") == "websocket.disconnect":
+                break
+
+            raw_bytes = inbound.get("bytes")
+            raw_text = inbound.get("text")
+
+            try:
+                if raw_bytes is not None:
+                    await openai_ws.send(json.dumps({
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(raw_bytes).decode("ascii"),
+                    }))
+                    continue
+
+                if raw_text is None:
+                    continue
+
+                msg = json.loads(raw_text)
+                msg_type = msg.get("type")
+
+                if msg_type == "audio":
+                    audio_b64 = msg.get("data")
+                    if audio_b64:
+                        await openai_ws.send(json.dumps({"type": "input_audio_buffer.append", "audio": audio_b64}))
+
+                elif msg_type == "audio.commit":
+                    if CODING_HELPER_CLIENT_VAD_COMMIT:
+                        await openai_ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+
+                elif msg_type == "text":
+                    await cancel_answer_for_interruption()
+                    await handle_completed_user_turn(msg.get("content", ""), replace_transcript=False)
+
+                elif msg_type == "heartbeat":
+                    await websocket.send_json({"type": "heartbeat"})
+
+                elif msg_type == "end":
+                    intentional_end = True
+                    logger.info(f"[{session_id}] Client ended coding helper session intentionally")
+                    break
+            except websockets.exceptions.ConnectionClosed:
+                alive = False
+                await websocket.send_json({"type": "error", "message": "Realtime transcription disconnected."})
+                break
+            except Exception as exc:
+                logger.error(f"[{session_id}] coding helper forward err: {exc}")
+
+    finally:
+        alive = False
+        if recv_openai_task:
+            recv_openai_task.cancel()
+            try:
+                await recv_openai_task
+            except asyncio.CancelledError:
+                pass
+        if answer_task:
+            answer_task.cancel()
+            try:
+                await answer_task
+            except asyncio.CancelledError:
+                pass
+        if openai_ws:
+            try:
+                await openai_ws.close()
+            except Exception:
+                pass
+
+    return intentional_end
+
+
 # ─── WEBSOCKET ───────────────────────────
 @app.websocket("/api/ws/session")
 async def ws_session(websocket: WebSocket):
@@ -622,6 +984,15 @@ async def ws_session(websocket: WebSocket):
 
         await websocket.send_json({"type": "session.ready", "session_id": session_id})
         await websocket.send_json({"type": "assistant.state", "state": "connecting"})
+
+        if text_only_mode:
+            intentional_end = await run_coding_helper_session(
+                websocket,
+                session_id=session_id,
+                resume_id=resume_id,
+                language=language,
+            )
+            return
 
         # Build prompt + conversation history for context
         from prompts import build_agent_prompt
