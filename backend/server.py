@@ -834,6 +834,7 @@ async def run_coding_helper_session(
         setup_payload = {
             "type": "session.update",
             "session": {
+                "type": "transcription",
                 "input_audio_format": "pcm16",
                 "input_audio_transcription": {
                     "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
