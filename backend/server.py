@@ -43,7 +43,7 @@ OPENAI_REALTIME_STT_URL = os.environ.get(
 )
 OPENAI_REALTIME_TRANSCRIPTION_MODEL = os.environ.get(
     "OPENAI_REALTIME_TRANSCRIPTION_MODEL",
-    "gpt-realtime-whisper",
+    "gpt-4o-mini-transcribe",
 )
 CODING_HELPER_STT_SAMPLE_RATE = int(os.environ.get("CODING_HELPER_STT_SAMPLE_RATE", "24000"))
 CODING_HELPER_STT_SILENCE_MS = int(os.environ.get("CODING_HELPER_STT_SILENCE_MS", "420"))
@@ -802,7 +802,7 @@ async def run_coding_helper_session(
                         await handle_completed_user_turn(transcript, replace_transcript=True)
                         continue
 
-                    if event_type == "session.updated":
+                    if event_type in {"session.updated", "transcription_session.updated"}:
                         logger.info(f"[{session_id}] OpenAI STT ready ({OPENAI_REALTIME_TRANSCRIPTION_MODEL})")
                         await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
                         continue
@@ -833,25 +833,22 @@ async def run_coding_helper_session(
             max_size=16 * 1024 * 1024,
         )
         setup_payload = {
-            "type": "session.update",
+            "type": "transcription_session.update",
             "session": {
-                "type": "transcription",
-                "audio": {
-                    "input": {
-                        "format": {"type": "audio/pcm", "rate": CODING_HELPER_STT_SAMPLE_RATE},
-                        "transcription": {
-                            "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
-                            "language": "en" if language.lower().startswith("en") else language.split("-")[0],
-                            "prompt": "Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2, API, backend, frontend, deployment, branch, and terminal commands.",
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": CODING_HELPER_STT_VAD_THRESHOLD,
-                            "prefix_padding_ms": 240,
-                            "silence_duration_ms": CODING_HELPER_STT_SILENCE_MS,
-                        },
-                    }
+                "input_audio_format": "pcm16",
+                "input_audio_transcription": {
+                    "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+                    "language": "en" if language.lower().startswith("en") else language.split("-")[0],
+                    "prompt": "Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2, API, backend, frontend, deployment, branch, and terminal commands.",
                 },
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": CODING_HELPER_STT_VAD_THRESHOLD,
+                    "prefix_padding_ms": 240,
+                    "silence_duration_ms": CODING_HELPER_STT_SILENCE_MS,
+                },
+                "input_audio_noise_reduction": {"type": "near_field"},
+                "include": [],
             },
         }
         await openai_ws.send(json.dumps(setup_payload))
