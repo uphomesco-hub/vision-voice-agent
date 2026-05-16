@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/vision-voice-agent/static/css/main.fd32874f.css",
-    "main.js": "/vision-voice-agent/static/js/main.68e951da.js",
+    "main.css": "/vision-voice-agent/static/css/main.3e899209.css",
+    "main.js": "/vision-voice-agent/static/js/main.2d1b7672.js",
     "index.html": "/vision-voice-agent/index.html",
-    "main.fd32874f.css.map": "/vision-voice-agent/static/css/main.fd32874f.css.map",
-    "main.68e951da.js.map": "/vision-voice-agent/static/js/main.68e951da.js.map"
+    "main.3e899209.css.map": "/vision-voice-agent/static/css/main.3e899209.css.map",
+    "main.2d1b7672.js.map": "/vision-voice-agent/static/js/main.2d1b7672.js.map"
   },
   "entrypoints": [
-    "static/css/main.fd32874f.css",
-    "static/js/main.68e951da.js"
+    "static/css/main.3e899209.css",
+    "static/js/main.2d1b7672.js"
   ]
 }
