@@ -24,11 +24,14 @@ export default function RepairAssistant() {
   const [transcript, setTranscript] = useState([]);
   const [sessionId, setSessionId] = useState(null);
   const [showTranscript, setShowTranscript] = useState(true);
+  const [isStarting, setIsStarting] = useState(false);
 
   const wsRef = useRef(null);
   const audioCtxRef = useRef(null);
   const processorRef = useRef(null);
   const micStreamRef = useRef(null);
+  const isStartingRef = useRef(false);
+  const micStartingRef = useRef(false);
   const heartbeatRef = useRef(null);
   const reconnectRef = useRef(null);
   const sessionActiveRef = useRef(false);
@@ -96,7 +99,13 @@ export default function RepairAssistant() {
   const connectWS = useCallback(() => new Promise((resolve, reject) => {
     const ws = new WebSocket(`${WS_BASE}/api/ws/session`);
     wsRef.current = ws;
-    const timeout = setTimeout(() => reject(new Error('Timeout')), 10000);
+    const timeout = setTimeout(() => {
+      ws.onopen = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      ws.close();
+      reject(new Error('Timeout'));
+    }, 10000);
 
     ws.onopen = () => {
       clearTimeout(timeout);
@@ -151,48 +160,64 @@ export default function RepairAssistant() {
   }), [handleMsg]);
 
   const startMic = useCallback(async () => {
+    if (micStartingRef.current) return;
+    if (micStreamRef.current || processorRef.current) {
+      setIsMicEnabled(true);
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Microphone access is not available in this browser.');
     }
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate: 16000,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    micStreamRef.current = stream;
+    micStartingRef.current = true;
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      micStreamRef.current = stream;
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    audioCtxRef.current = ctx;
-    const src = ctx.createMediaStreamSource(stream);
-    const proc = ctx.createScriptProcessor(8192, 1, 1);
-    const silentGain = ctx.createGain();
-    silentGain.gain.value = 0;
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      audioCtxRef.current = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      const silentGain = ctx.createGain();
+      silentGain.gain.value = 0;
 
-    proc.onaudioprocess = (event) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      const input = event.inputBuffer.getChannelData(0);
-      const pcm = new Int16Array(input.length);
-      for (let i = 0; i < input.length; i += 1) {
-        pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
-      }
-      try {
-        wsRef.current.send(JSON.stringify({ type: 'audio', data: u8ToB64(new Uint8Array(pcm.buffer)) }));
-      } catch {}
-    };
+      proc.onaudioprocess = (event) => {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        const input = event.inputBuffer.getChannelData(0);
+        const pcm = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i += 1) {
+          pcm[i] = Math.max(-32768, Math.min(32767, Math.round(input[i] * 32767)));
+        }
+        try {
+          wsRef.current.send(JSON.stringify({ type: 'audio', data: u8ToB64(new Uint8Array(pcm.buffer)) }));
+        } catch {}
+      };
 
-    src.connect(proc);
-    proc.connect(silentGain);
-    silentGain.connect(ctx.destination);
-    processorRef.current = proc;
-    setIsMicEnabled(true);
-    log('MIC', 'Active');
+      src.connect(proc);
+      proc.connect(silentGain);
+      silentGain.connect(ctx.destination);
+      processorRef.current = proc;
+      setIsMicEnabled(true);
+      log('MIC', 'Active');
+    } catch (error) {
+      stream?.getTracks().forEach(track => track.stop());
+      micStreamRef.current = null;
+      throw error;
+    } finally {
+      micStartingRef.current = false;
+    }
   }, []);
 
   const stopMic = useCallback(() => {
+    micStartingRef.current = false;
     processorRef.current?.disconnect();
     processorRef.current = null;
     audioCtxRef.current?.close();
@@ -223,6 +248,9 @@ export default function RepairAssistant() {
       setStatus('Backend URL missing');
       return;
     }
+    if (isStartingRef.current || isConnected) return;
+    isStartingRef.current = true;
+    setIsStarting(true);
     try {
       setStatus('Connecting...');
       sessionActiveRef.current = true;
@@ -245,10 +273,15 @@ export default function RepairAssistant() {
       setSessionId(null);
       sessionIdRef.current = null;
       setStatus(`Error: ${e.message}`);
+    } finally {
+      isStartingRef.current = false;
+      setIsStarting(false);
     }
   };
 
   const endSession = () => {
+    isStartingRef.current = false;
+    setIsStarting(false);
     sessionActiveRef.current = false;
     cleanup();
     setIsConnected(false);
@@ -268,6 +301,7 @@ export default function RepairAssistant() {
       setStatus('Mic off');
       return;
     }
+    if (micStartingRef.current) return;
     await startMic();
     setVoiceState('listening');
     setStatus('Listening for a coding question...');
@@ -313,8 +347,8 @@ export default function RepairAssistant() {
               </div>
               <h2>Zeno AI Coding Helper</h2>
               <p>Ask coding questions by voice. Answers appear in chat only.</p>
-              <button className="ra-btn-init" onClick={startSession} data-testid="start-session-button">
-                Start Session
+              <button className="ra-btn-init" onClick={startSession} disabled={isStarting} data-testid="start-session-button">
+                {isStarting ? 'Connecting...' : 'Start Session'}
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
               </button>
             </section>

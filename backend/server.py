@@ -10,6 +10,7 @@ import base64
 import io
 import re
 import websockets
+import httpx
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from collections import Counter
@@ -31,10 +32,22 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
 MODEL_ID = os.environ.get("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
+CODING_HELPER_TEXT_MODEL = os.environ.get("CODING_HELPER_TEXT_MODEL", "gemini-2.5-flash")
 INPUT_SAMPLE_RATE = 16000
 GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
 
-CODING_HELPER_PROMPT = """
+CODING_HELPER_LIVE_PROMPT = """
+You are only the realtime speech turn detector for Zeno AI Coding Helper.
+
+Rules:
+- Do not answer coding questions.
+- Do not explain, reason, summarize, or ask follow-up questions.
+- For every completed user utterance, respond with exactly one short word: ACK.
+- Keep the response as short as possible so the server can move on quickly.
+- Always stay in English.
+"""
+
+CODING_HELPER_ANSWER_PROMPT = """
 You are Zeno AI Coding Helper, a fast voice-to-chat coding assistant.
 
 Core behavior:
@@ -48,8 +61,12 @@ Core behavior:
 - If the user interrupts with a new question, stop the previous answer and answer the newer question.
 - If the user is merely reciting, repeating, rehearsing, or reading back your previous answer, do not answer. Stay silent.
 - If the utterance is not a question or actionable coding request, do not answer unless it clearly asks for help.
+- Do not write meta headings like "Acknowledge readiness", "Defining essence", or describe your thinking process.
+- For simple definition questions like "what is Python", answer the definition directly.
 - Always answer in English.
 """
+
+CODING_HELPER_PROMPT = CODING_HELPER_ANSWER_PROMPT
 
 RECITATION_STOPWORDS = {
     "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
@@ -132,6 +149,158 @@ def _is_probable_answer_recitation(user_text: str, last_answer: str) -> Tuple[bo
         "cosine": round(cosine, 3),
         "sequence": round(sequence, 3),
     }
+
+
+def _voice_word_key(word: str) -> str:
+    return re.sub(r"^[^\w+#.]+|[^\w+#.]+$", "", (word or "").lower())
+
+
+def _voice_words_key(words: List[str]) -> List[str]:
+    return [_voice_word_key(word) for word in words if _voice_word_key(word)]
+
+
+def _merge_voice_fragment(buffer: str, fragment: str) -> str:
+    """Merge streaming STT fragments that may arrive as deltas or cumulative text."""
+    current = re.sub(r"\s+", " ", (buffer or "").strip())
+    incoming = re.sub(r"\s+", " ", (fragment or "").strip())
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+
+    current_norm = _compact_text(current)
+    incoming_norm = _compact_text(incoming)
+    if not incoming_norm or incoming_norm in current_norm:
+        return current
+    if current_norm and incoming_norm.startswith(current_norm):
+        return incoming
+
+    current_words = current.split()
+    incoming_words = incoming.split()
+    current_keys = _voice_words_key(current_words)
+    incoming_keys = _voice_words_key(incoming_words)
+    max_overlap = min(len(current_keys), len(incoming_keys))
+    for size in range(max_overlap, 0, -1):
+        if current_keys[-size:] == incoming_keys[:size]:
+            return " ".join(current_words + incoming_words[size:])
+    return f"{current} {incoming}".strip()
+
+
+def _clean_voice_text(text: str) -> str:
+    """Reduce common live-STT stutters before gating or answering."""
+    value = re.sub(r"\s+", " ", (text or "").strip())
+    if not value:
+        return ""
+
+    words = value.split()
+    collapsed: List[str] = []
+    previous_key = ""
+    for word in words:
+        key = _voice_word_key(word)
+        if key and key == previous_key:
+            continue
+        collapsed.append(word)
+        if key:
+            previous_key = key
+
+    words = collapsed
+    changed = True
+    while changed:
+        changed = False
+        output: List[str] = []
+        i = 0
+        while i < len(words):
+            matched = False
+            max_phrase = min(5, (len(words) - i) // 2)
+            for size in range(max_phrase, 1, -1):
+                left = _voice_words_key(words[i:i + size])
+                right = _voice_words_key(words[i + size:i + (2 * size)])
+                if left and left == right:
+                    output.extend(words[i:i + size])
+                    i += 2 * size
+                    changed = True
+                    matched = True
+                    break
+            if not matched:
+                output.append(words[i])
+                i += 1
+        words = output
+
+    value = " ".join(words)
+
+    def _repair_definition_question(match: re.Match) -> str:
+        subject = match.group(1).strip().rstrip("?.!")
+        return f"What is {subject}?"
+
+    value = re.sub(
+        r"^\s*what\s+(?:it\s+)?is\s+(?:by\s+)?(?:this\s+)?([a-z][a-z0-9+#._ -]{0,80})\??\s*$",
+        _repair_definition_question,
+        value,
+        flags=re.IGNORECASE,
+    )
+    return re.sub(r"\s+([?.!,])", r"\1", value).strip()
+
+
+def _clean_assistant_answer(text: str) -> str:
+    value = (text or "").strip()
+    value = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"(?is)^\*\*(?:acknowledge|acknowledging|defining|analyzing|thinking|planning)[^*]{0,90}\*\*\s*",
+        "",
+        value,
+    ).strip()
+    return value
+
+
+def _format_coding_helper_history(turns: List[Any]) -> str:
+    lines: List[str] = []
+    for turn in turns[-12:]:
+        role = "User" if turn.role == "user" else "Assistant"
+        content = _clean_voice_text(turn.content) if turn.role == "user" else (turn.content or "").strip()
+        if content:
+            lines.append(f"{role}: {content[:1200]}")
+    return "\n".join(lines)
+
+
+async def _generate_coding_helper_answer(user_text: str, turns: List[Any], timeout: float = 12.0) -> str:
+    if not GEMINI_API_KEY:
+        return "Backend is missing `GOOGLE_API_KEY`, so I cannot generate the answer right now."
+
+    history = _format_coding_helper_history(turns)
+    history_block = f"\n\nRecent chat context:\n{history}" if history else ""
+    prompt = (
+        f"{CODING_HELPER_ANSWER_PROMPT}{history_block}\n\n"
+        "Current user question from voice transcription:\n"
+        f"{user_text}\n\n"
+        "Answer now. Keep it concise, direct, and interview-acceptable. "
+        "If the transcription is awkward but clearly asks a simple definition, repair it silently and answer the intended question."
+    )
+    payload = {
+        "contents": [{
+            "role": "user",
+            "parts": [{"text": prompt}],
+        }],
+        "generationConfig": {
+            "temperature": 0.25,
+            "topP": 0.9,
+            "maxOutputTokens": 520,
+        },
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CODING_HELPER_TEXT_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            parts = data["candidates"][0]["content"]["parts"]
+            answer = "".join(part.get("text", "") for part in parts)
+            return _clean_assistant_answer(answer) or "I heard the question, but I could not form a useful answer. Please ask it once more."
+    except httpx.TimeoutException:
+        logger.warning("coding helper answer timed out")
+        return "That took too long to answer. Ask it again in one shorter question and I’ll respond faster."
+    except Exception as exc:
+        logger.error(f"coding helper answer failed: {exc}")
+        return "I hit an answer-generation error. Please ask that once more."
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
@@ -419,6 +588,7 @@ async def ws_session(websocket: WebSocket):
     nudge = NudgeEngine()
     ai_speaking = False
     intentional_end = False
+    answer_task: Optional[asyncio.Task] = None
 
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=30)
@@ -453,7 +623,7 @@ async def ws_session(websocket: WebSocket):
 
         # Build prompt + conversation history for context
         from prompts import build_agent_prompt
-        system_prompt = CODING_HELPER_PROMPT if text_only_mode else build_agent_prompt(persona_id, voice_id)
+        system_prompt = CODING_HELPER_LIVE_PROMPT if text_only_mode else build_agent_prompt(persona_id, voice_id)
 
         # Load previous turns for reconnect context
         history_context = ""
@@ -492,9 +662,9 @@ async def ws_session(websocket: WebSocket):
         full_prompt = system_prompt + history_context + active_manual_context
         if text_only_mode:
             full_prompt += (
-                "\n\nSESSION MODE: Voice input, chat transcript output. There is no camera, no manual lookup, and no persona selection. "
-                "The frontend will not play assistant audio; it will show only your output transcript. "
-                "The server may suppress turns that look like the user is reciting your previous answer."
+                "\n\nSESSION MODE: Voice input, chat transcript output. Gemini Live is used here only for speech turn detection. "
+                "The server generates the real chat answer with a separate fast text model after the user's turn ends. "
+                "Do not answer the user's coding content in Live; respond only with ACK."
             )
         else:
             full_prompt += (
@@ -529,7 +699,6 @@ async def ws_session(websocket: WebSocket):
         }
         if text_only_mode:
             setup_payload["tools"] = []
-            setup_payload["output_audio_transcription"] = {}
         else:
             setup_payload["tools"] = [{"function_declarations": [LOOKUP_MANUAL_DECL]}]
             setup_payload["output_audio_transcription"] = {}
@@ -566,13 +735,37 @@ async def ws_session(websocket: WebSocket):
 
         # ─── Gemini → Client ───
         last_assistant_answer = ""
+        answer_seq = 0
 
         async def recv_gemini():
-            nonlocal alive, ai_speaking, last_assistant_answer
+            nonlocal alive, ai_speaking, last_assistant_answer, answer_task, answer_seq
             user_buf = ""
             asst_buf = ""
             manual_close_seen = False
             assistant_text_part_seen = False
+
+            async def answer_and_send(seq: int, user_text: str, prior_turns: List[Any]):
+                nonlocal last_assistant_answer
+                try:
+                    answer = await _generate_coding_helper_answer(user_text, prior_turns)
+                    if not alive or seq != answer_seq:
+                        return
+                    await websocket.send_json({"type": "transcription", "role": "assistant", "text": answer, "final": True})
+                    last_assistant_answer = answer
+                    async with AsyncSessionLocal() as db:
+                        await SessionStore.add_turn(db, session_id, "assistant", answer)
+                    await websocket.send_json({"type": "turn_complete"})
+                    await websocket.send_json({"type": "assistant.state", "state": "listening"})
+                    await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.error(f"[{session_id}] coding answer task failed: {exc}")
+                    if alive and seq == answer_seq:
+                        await websocket.send_json({"type": "error", "message": "Answer generation failed. Please ask again."})
+                        await websocket.send_json({"type": "turn_complete"})
+                        await websocket.send_json({"type": "assistant.state", "state": "listening"})
+
             try:
                 async for raw_msg in gemini_ws:
                     if not alive:
@@ -618,7 +811,16 @@ async def ws_session(websocket: WebSocket):
                         # Input transcription
                         itx = sc.get("inputTranscription")
                         if itx and itx.get("text"):
-                            user_buf += itx["text"]
+                            if text_only_mode:
+                                if answer_task and not answer_task.done():
+                                    answer_seq += 1
+                                    answer_task.cancel()
+                                    await websocket.send_json({"type": "interrupted"})
+                                    await websocket.send_json({"type": "assistant.state", "state": "listening"})
+                                    await websocket.send_json({"type": "status", "message": "Listening for the new question..."})
+                                user_buf = _merge_voice_fragment(user_buf, itx["text"])
+                            else:
+                                user_buf += itx["text"]
                             nudge.user_spoke()
                             if not text_only_mode:
                                 await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
@@ -630,7 +832,7 @@ async def ws_session(websocket: WebSocket):
                         otx = sc.get("outputTranscription")
                         if otx and otx.get("text"):
                             if text_only_mode:
-                                if not assistant_text_part_seen:
+                                if not assistant_text_part_seen and otx["text"].strip().upper() != "ACK":
                                     asst_buf += otx["text"]
                             else:
                                 asst_buf += otx["text"]
@@ -647,6 +849,9 @@ async def ws_session(websocket: WebSocket):
                         if sc.get("interrupted"):
                             ai_speaking = False
                             if text_only_mode:
+                                if answer_task and not answer_task.done():
+                                    answer_seq += 1
+                                    answer_task.cancel()
                                 asst_buf = ""
                                 assistant_text_part_seen = False
                             await websocket.send_json({"type": "interrupted"})
@@ -655,9 +860,10 @@ async def ws_session(websocket: WebSocket):
                         if sc.get("turnComplete"):
                             ai_speaking = False
                             logger.info(f"[{session_id}] Turn complete")
+                            send_turn_complete = True
                             if text_only_mode:
-                                user_text = user_buf.strip()
-                                assistant_text = asst_buf.strip()
+                                user_text = _clean_voice_text(user_buf)
+                                assistant_text = _clean_assistant_answer(asst_buf)
                                 is_recitation, metrics = _is_probable_answer_recitation(user_text, last_assistant_answer)
                                 is_actionable = _is_question_or_coding_request(user_text)
 
@@ -666,13 +872,16 @@ async def ws_session(websocket: WebSocket):
                                     await websocket.send_json({"type": "recitation.ignored"})
                                 elif user_text and is_actionable:
                                     await websocket.send_json({"type": "transcription", "role": "user", "text": user_text, "final": True})
-                                    if assistant_text:
-                                        await websocket.send_json({"type": "transcription", "role": "assistant", "text": assistant_text, "final": True})
-                                        last_assistant_answer = assistant_text
+                                    await websocket.send_json({"type": "assistant.state", "state": "thinking"})
+                                    await websocket.send_json({"type": "status", "message": "Answering..."})
                                     async with AsyncSessionLocal() as db:
+                                        prior_turns = await SessionStore.get_turns(db, session_id, limit=12)
                                         await SessionStore.add_turn(db, session_id, "user", user_text)
-                                        if assistant_text:
-                                            await SessionStore.add_turn(db, session_id, "assistant", assistant_text)
+                                    answer_seq += 1
+                                    if answer_task and not answer_task.done():
+                                        answer_task.cancel()
+                                    answer_task = asyncio.create_task(answer_and_send(answer_seq, user_text, prior_turns))
+                                    send_turn_complete = False
                                 elif user_text:
                                     logger.info(f"[{session_id}] Suppressed non-question voice turn: {user_text[:120]!r}")
                                     await websocket.send_json({"type": "non_question.ignored"})
@@ -693,8 +902,9 @@ async def ws_session(websocket: WebSocket):
                                                 await SessionStore.update_session(db, session_id, current_step=new_step)
                                                 await websocket.send_json({"type": "step.update", "step": new_step})
                                                 logger.info(f"[{session_id}] Step advanced to {new_step}")
-                            await websocket.send_json({"type": "turn_complete"})
-                            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+                            if send_turn_complete:
+                                await websocket.send_json({"type": "turn_complete"})
+                                await websocket.send_json({"type": "assistant.state", "state": "listening"})
                             user_buf = ""
                             asst_buf = ""
                             manual_close_seen = False
@@ -945,6 +1155,12 @@ async def ws_session(websocket: WebSocket):
             recv_task.cancel()
             try:
                 await recv_task
+            except asyncio.CancelledError:
+                pass
+        if answer_task:
+            answer_task.cancel()
+            try:
+                await answer_task
             except asyncio.CancelledError:
                 pass
         if gemini_ws:
