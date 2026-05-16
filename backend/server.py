@@ -832,7 +832,7 @@ async def run_coding_helper_session(
             max_size=16 * 1024 * 1024,
         )
         setup_payload = {
-            "type": "transcription_session.update",
+            "type": "session.update",
             "session": {
                 "input_audio_format": "pcm16",
                 "input_audio_transcription": {
