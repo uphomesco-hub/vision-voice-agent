@@ -824,7 +824,6 @@ async def run_coding_helper_session(
             OPENAI_REALTIME_STT_URL,
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1",
                 "OpenAI-Safety-Identifier": session_id,
             },
             ping_interval=30,
