@@ -80,6 +80,7 @@
 .ra-config-card p { color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .ra-config-card code { color: var(--text); }
 
+/* ── Setup / pre-session page ── */
 .ra-setup-page {
   width: 100%;
   height: 100%;
@@ -122,6 +123,23 @@
   margin-bottom: 4px;
 }
 
+.ra-helper-orb .ra-aura-ring {
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid rgba(255,255,255,0.26);
+  border-radius: 50%;
+  opacity: 0.22;
+  animation: aura-listening 2s ease-in-out infinite;
+}
+
+.ra-aura-ring.delay-1 { animation-delay: 0.25s; }
+.ra-aura-ring.delay-2 { animation-delay: 0.5s; }
+
+@keyframes aura-listening {
+  0%, 100% { transform: scale(0.9); opacity: 0.34; }
+  50% { transform: scale(1.25); opacity: 0.08; }
+}
+
 .ra-btn-init {
   width: 100%;
   display: flex;
@@ -144,211 +162,53 @@
 .ra-btn-init:hover { opacity: 0.86; }
 .ra-btn-init:active { transform: scale(0.998); }
 
+/* ── Active session layout — full-viewport chat ── */
 .ra-session-layout {
   display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
 }
 
-.ra-helper-section {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: #000;
-}
-
-.ra-helper-stage {
-  position: relative;
+.ra-chat-section {
   flex: 1;
   min-height: 0;
-  display: grid;
-  place-items: center;
-}
-
-.ra-voice-aura {
-  position: relative;
-  width: 72px;
-  height: 72px;
-  pointer-events: none;
-}
-
-.ra-helper-orb .ra-aura-ring,
-.ra-voice-aura .ra-aura-ring {
-  position: absolute;
-  inset: 0;
-  border: 1.5px solid rgba(255,255,255,0.26);
-  border-radius: 50%;
-  opacity: 0.22;
-}
-
-.ra-voice-aura.listening .ra-aura-ring,
-.ra-helper-orb .ra-aura-ring {
-  animation: aura-listening 2s ease-in-out infinite;
-}
-
-.ra-voice-aura.thinking .ra-aura-ring {
-  animation: aura-thinking 1.25s ease-in-out infinite;
-  border-color: rgba(255,255,255,0.16);
-}
-
-.ra-aura-ring.delay-1 { animation-delay: 0.25s; }
-.ra-aura-ring.delay-2 { animation-delay: 0.5s; }
-
-@keyframes aura-listening {
-  0%, 100% { transform: scale(0.9); opacity: 0.34; }
-  50% { transform: scale(1.25); opacity: 0.08; }
-}
-
-@keyframes aura-thinking {
-  0%, 100% { transform: scale(0.92); opacity: 0.22; }
-  50% { transform: scale(1.12); opacity: 0.06; }
-}
-
-.ra-voice-badge {
-  position: absolute;
-  bottom: calc(50% - 72px);
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 92px;
-  padding: 4px 12px;
-  border-radius: 9999px;
-  background: rgba(17,17,17,0.78);
-  color: var(--text-2);
-  font-size: 10px;
-  font-weight: 600;
-  text-align: center;
-}
-
-.ra-controls-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  flex-shrink: 0;
-  padding: 12px 16px;
-  background: rgba(17,17,17,0.92);
-  border-top: 1px solid var(--border);
-}
-
-.ra-controls-center {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-
-.ra-control-btn {
-  width: 44px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text-2);
-  cursor: pointer;
-  box-shadow: var(--ring);
-}
-
-.ra-control-btn:hover:not(:disabled) {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.ra-control-btn:disabled {
-  opacity: 0.28;
-  cursor: not-allowed;
-}
-
-.ra-control-btn.active {
-  background: #fff;
-  color: #111;
-}
-
-.ra-control-btn-end {
-  background: var(--surface-3);
-}
-
-.ra-control-btn-end:hover {
-  background: #3a2020;
-  color: #ff6666;
-}
-
-.ra-control-btn-text {
-  width: auto;
-  padding: 0 14px;
-  gap: 6px;
-  border-radius: 22px;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.ra-control-btn-text.active {
-  background: rgba(255,255,255,0.1);
-  color: var(--text);
-  box-shadow: none;
-}
-
-.ra-info-section {
-  width: 420px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  overflow: hidden;
+  background: var(--bg);
 }
 
-.ra-panel {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.ra-panel-title {
-  margin-bottom: 8px;
-  color: var(--text-3);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.ra-transcript-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
+/* column-reverse: newest message sits at the visual top; older ones push down */
 .ra-transcript-messages {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 5px;
+  flex-direction: column-reverse;
+  gap: 6px;
   overflow-y: auto;
-  padding-top: 2px;
+  padding: 14px 16px;
+  overscroll-behavior: contain;
 }
 
 .ra-message {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 7px 9px;
-  border-radius: 7px;
+  padding: 8px 10px;
+  border-radius: 8px;
   color: var(--text-2);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
 .ra-message.user { background: var(--surface-2); }
 .ra-message.assistant { background: rgba(255,255,255,0.045); color: var(--text); }
 .ra-message.system { background: transparent; color: var(--text-3); font-style: italic; }
+
 .ra-message-role {
-  min-width: 24px;
+  min-width: 26px;
   flex-shrink: 0;
   padding-top: 2px;
   color: var(--text-3);
@@ -365,6 +225,64 @@
 .ra-transcript-messages::-webkit-scrollbar { width: 3px; }
 .ra-transcript-messages::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
 
+/* ── Bottom controls bar — 2 buttons only ── */
+.ra-controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  flex-shrink: 0;
+  padding: 16px 24px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  background: rgba(17,17,17,0.96);
+  border-top: 1px solid var(--border);
+}
+
+.ra-control-btn {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  box-shadow: var(--ring);
+  transition: background 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ra-control-btn:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.ra-control-btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.ra-control-btn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+.ra-control-btn.active {
+  background: #fff;
+  color: #111;
+}
+
+.ra-control-btn-cancel {
+  background: var(--surface-3);
+}
+
+.ra-control-btn-cancel:hover {
+  background: #3a2020;
+  color: #ff6666;
+}
+
+/* ── Mobile ── */
 @media (max-width: 768px) {
   .ra-header {
     height: 46px;
@@ -375,31 +293,6 @@
   .ra-header-center { flex: 0 0 auto; padding: 0 8px; }
   .ra-mode-badge { display: none; }
   .ra-live-text { max-width: 150px; }
-
-  .ra-session-layout {
-    flex-direction: column;
-  }
-
-  .ra-helper-section {
-    flex: none;
-    height: 42vh;
-  }
-
-  .ra-info-section {
-    width: 100%;
-    flex: 1;
-    border-left: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .ra-session-layout.no-transcript .ra-helper-section {
-    flex: 1;
-    height: auto;
-  }
-
-  .ra-session-layout.no-transcript .ra-info-section {
-    display: none;
-  }
 
   .ra-helper-card {
     padding: 22px;
@@ -413,10 +306,24 @@
     font-size: 13px;
   }
 
-  .ra-control-label { display: none; }
-  .ra-control-btn-text {
-    width: 44px;
-    padding: 0;
-    border-radius: 50%;
+  .ra-transcript-messages {
+    padding: 10px 12px;
+    gap: 5px;
+  }
+
+  .ra-message {
+    font-size: 13px;
+    padding: 7px 9px;
+  }
+
+  .ra-controls-bar {
+    gap: 24px;
+    padding: 14px 24px;
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+  }
+
+  .ra-control-btn {
+    width: 56px;
+    height: 56px;
   }
 }

@@ -18,7 +18,6 @@ export default function RepairAssistant() {
   const [status, setStatus] = useState('Ready');
   const [transcript, setTranscript] = useState([]);
   const [sessionId, setSessionId] = useState(null);
-  const [showTranscript, setShowTranscript] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
 
   const wsRef = useRef(null);
@@ -32,12 +31,7 @@ export default function RepairAssistant() {
   const sessionActiveRef = useRef(false);
   const sessionIdRef = useRef(null);
   const reconnectCountRef = useRef(0);
-  const transcriptEndRef = useRef(null);
   const hasBackendConfig = Boolean(BACKEND_URL);
-
-  useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [transcript]);
 
   const appendTranscript = useCallback((role, text, final = false, replace = false) => {
     setTranscript(prev => {
@@ -365,52 +359,43 @@ export default function RepairAssistant() {
             </section>
           </div>
         ) : (
-          <div className={`ra-session-layout ${!showTranscript ? 'no-transcript' : ''}`}>
-            <section className="ra-helper-section">
-              <div className="ra-helper-stage">
-                <div className={`ra-voice-aura ${voiceState}`} data-testid="voice-aura">
-                  <div className="ra-aura-ring"></div>
-                  <div className="ra-aura-ring delay-1"></div>
-                  <div className="ra-aura-ring delay-2"></div>
-                </div>
-                <div className="ra-voice-badge" data-testid="voice-state-badge">
-                  {voiceState === 'listening' && 'Listening'}
-                  {voiceState === 'thinking' && 'Thinking'}
-                  {voiceState === 'idle' && 'Idle'}
-                </div>
-              </div>
-              <div className="ra-controls-bar" data-testid="controls-bar">
-                <button className={`ra-control-btn ra-control-btn-text ${showTranscript ? 'active' : ''}`} onClick={() => setShowTranscript(!showTranscript)} data-testid="transcript-toggle-button">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <span className="ra-control-label">{showTranscript ? 'Hide' : 'Show'}</span>
-                </button>
-                <div className="ra-controls-center">
-                  <button className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`} onClick={toggleMic} disabled={!isConnected} data-testid="mic-button">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-                  </button>
-                  <button className="ra-control-btn ra-control-btn-end" onClick={endSession} data-testid="end-session-button">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  </button>
-                </div>
+          <div className="ra-session-layout" data-testid="session-layout">
+            <section className="ra-chat-section" data-testid="transcript-panel">
+              <div className="ra-transcript-messages">
+                {transcript.map((turn, index) => (
+                  <div key={`${turn.role}-${index}`} className={`ra-message ${turn.role}`}>
+                    <span className="ra-message-role">{turn.role === 'user' ? 'YOU' : turn.role === 'system' ? 'SYS' : 'AI'}</span>
+                    <span className="ra-message-content">{turn.text}</span>
+                  </div>
+                ))}
               </div>
             </section>
-
-            {showTranscript && (
-              <section className="ra-info-section">
-                <div className="ra-panel ra-transcript-panel" data-testid="transcript-panel">
-                  <div className="ra-panel-title">Conversation</div>
-                  <div className="ra-transcript-messages">
-                    {transcript.map((turn, index) => (
-                      <div key={`${turn.role}-${index}`} className={`ra-message ${turn.role}`}>
-                        <span className="ra-message-role">{turn.role === 'user' ? 'YOU' : turn.role === 'system' ? 'SYS' : 'AI'}</span>
-                        <span className="ra-message-content">{turn.text}</span>
-                      </div>
-                    ))}
-                    <div ref={transcriptEndRef} />
-                  </div>
-                </div>
-              </section>
-            )}
+            <div className="ra-controls-bar" data-testid="controls-bar">
+              <button
+                className={`ra-control-btn ${isMicEnabled ? 'active' : ''}`}
+                onClick={toggleMic}
+                disabled={!isConnected}
+                data-testid="mic-button"
+                aria-label={isMicEnabled ? 'Mute microphone' : 'Unmute microphone'}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" x2="12" y1="19" y2="22"/>
+                </svg>
+              </button>
+              <button
+                className="ra-control-btn ra-control-btn-cancel"
+                onClick={endSession}
+                data-testid="cancel-button"
+                aria-label="Cancel session"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
           </div>
         )}
       </main>
