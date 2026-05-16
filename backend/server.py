@@ -11,6 +11,8 @@ import io
 import re
 import websockets
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
+from collections import Counter
 from typing import Optional, Dict, Any, List, Tuple
 from PIL import Image
 
@@ -28,9 +30,108 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
 GEMINI_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
-MODEL_ID = "gemini-2.5-flash-native-audio-latest"
+MODEL_ID = os.environ.get("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
 INPUT_SAMPLE_RATE = 16000
 GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
+
+CODING_HELPER_PROMPT = """
+You are Zeno AI Coding Helper, a fast voice-to-chat coding assistant.
+
+Core behavior:
+- Listen to the user's full spoken turn before answering.
+- Keep answers optimized for the chat transcript. The app displays only your output transcript and does not play assistant audio.
+- Help with coding, debugging, architecture, commands, Git, deployments, APIs, iOS, web, backend, and developer workflow questions.
+- Keep answers direct and useful. Default to short interview-acceptable answers: 3-6 tight bullets or a compact paragraph.
+- If the question needs depth, give enough detail to be correct, but avoid long essays unless the user asks for a deep explanation.
+- Prefer wording the user can say aloud in an interview: clear definition, key tradeoff, and one concrete example when useful.
+- For debugging or implementation questions, include concrete commands/code only when they materially help.
+- If the user interrupts with a new question, stop the previous answer and answer the newer question.
+- If the user is merely reciting, repeating, rehearsing, or reading back your previous answer, do not answer. Stay silent.
+- If the utterance is not a question or actionable coding request, do not answer unless it clearly asks for help.
+- Always answer in English.
+"""
+
+RECITATION_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has",
+    "have", "i", "if", "in", "is", "it", "its", "me", "my", "of", "on", "or",
+    "our", "so", "that", "the", "then", "there", "this", "to", "was", "we",
+    "with", "you", "your",
+}
+
+QUESTION_OR_REQUEST_RE = re.compile(
+    r"\b("
+    r"how|what|why|where|when|which|who|can|could|should|would|do|does|did|"
+    r"is|are|will|explain|tell me|help me|show me|fix|debug|write|create|"
+    r"make|implement|build|review|check|compare|refactor|run|install|deploy|"
+    r"error|exception|bug|issue|failing|failed|crash|code|function|class|api|"
+    r"backend|frontend|react|javascript|typescript|python|swift|xcode|ios|git|"
+    r"github|aws|ec2|netlify|database|server|terminal|command"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9+#._ -]+", " ", (value or "").lower())).strip()
+
+
+def _content_tokens(value: str) -> List[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9+#._-]+", (value or "").lower())
+        if len(token) > 2 and token not in RECITATION_STOPWORDS
+    ]
+
+
+def _token_cosine(left: List[str], right: List[str]) -> float:
+    if not left or not right:
+        return 0.0
+    a = Counter(left)
+    b = Counter(right)
+    common = set(a) & set(b)
+    numerator = sum(a[token] * b[token] for token in common)
+    left_norm = sum(count * count for count in a.values()) ** 0.5
+    right_norm = sum(count * count for count in b.values()) ** 0.5
+    if not left_norm or not right_norm:
+        return 0.0
+    return numerator / (left_norm * right_norm)
+
+
+def _is_question_or_coding_request(text: str) -> bool:
+    normalized = _compact_text(text)
+    if not normalized:
+        return False
+    if "?" in text:
+        return True
+    if QUESTION_OR_REQUEST_RE.search(normalized):
+        return True
+    tokens = _content_tokens(normalized)
+    return len(tokens) >= 4 and any(token in tokens for token in {"npm", "pip", "git", "docker", "server", "route", "branch"})
+
+
+def _is_probable_answer_recitation(user_text: str, last_answer: str) -> Tuple[bool, Dict[str, float]]:
+    if not user_text.strip() or not last_answer.strip():
+        return False, {"overlap": 0.0, "cosine": 0.0, "sequence": 0.0}
+
+    user_tokens = _content_tokens(user_text)
+    answer_tokens = _content_tokens(last_answer)
+    if len(user_tokens) < 5 or len(answer_tokens) < 8:
+        return False, {"overlap": 0.0, "cosine": 0.0, "sequence": 0.0}
+
+    user_set = set(user_tokens)
+    answer_set = set(answer_tokens)
+    overlap = len(user_set & answer_set) / max(1, len(user_set))
+    cosine = _token_cosine(user_tokens, answer_tokens)
+    sequence = SequenceMatcher(None, _compact_text(user_text), _compact_text(last_answer)).ratio()
+    question_like = _is_question_or_coding_request(user_text)
+
+    strong_match = overlap >= 0.78 or cosine >= 0.74 or sequence >= 0.70
+    medium_non_question_match = not question_like and (overlap >= 0.56 or cosine >= 0.50 or sequence >= 0.54)
+    return strong_match or medium_non_question_match, {
+        "overlap": round(overlap, 3),
+        "cosine": round(cosine, 3),
+        "sequence": round(sequence, 3),
+    }
 
 # ─── Frame Diff ──────────────────────
 DIFF_THUMB_SIZE = (32, 32)
@@ -245,7 +346,12 @@ api = APIRouter(prefix="/api")
 
 @api.get("/health")
 async def health():
-    return {"status": "healthy", "model": MODEL_ID, "version": "2.0-step2"}
+    return {
+        "status": "healthy",
+        "model": MODEL_ID,
+        "mode": "coding-helper",
+        "version": "2.1-coding-helper",
+    }
 
 @api.get("/personas")
 async def list_personas():
@@ -325,6 +431,8 @@ async def ws_session(websocket: WebSocket):
         voice_id = cfg.get("voice_id", "Puck")
         language = cfg.get("language", "en-US")
         resume_id = cfg.get("resume_session_id")  # For reconnect-with-history
+        assistant_mode = cfg.get("mode", "coding_helper")
+        text_only_mode = assistant_mode == "coding_helper"
 
         # Create or resume session
         async with AsyncSessionLocal() as db:
@@ -345,7 +453,7 @@ async def ws_session(websocket: WebSocket):
 
         # Build prompt + conversation history for context
         from prompts import build_agent_prompt
-        system_prompt = build_agent_prompt(persona_id, voice_id)
+        system_prompt = CODING_HELPER_PROMPT if text_only_mode else build_agent_prompt(persona_id, voice_id)
 
         # Load previous turns for reconnect context
         history_context = ""
@@ -360,33 +468,41 @@ async def ws_session(websocket: WebSocket):
                         history_context += f"{role_label}: {t.content}\n"
                     history_context += "\nContinue the conversation naturally from where you left off. Do NOT repeat your last response."
 
-                # Load active manual context
-                sess = await SessionStore.get_session(db, session_id)
-                if sess and sess.active_manual_id:
-                    manual = await get_manual_by_id(db, sess.active_manual_id)
-                    if manual:
-                        active_manual_context = f"\n\nACTIVE MANUAL (already loaded — do NOT call lookup_manual again): {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
+                if not text_only_mode:
+                    # Load active manual context
+                    sess = await SessionStore.get_session(db, session_id)
+                    if sess and sess.active_manual_id:
+                        manual = await get_manual_by_id(db, sess.active_manual_id)
+                        if manual:
+                            active_manual_context = f"\n\nACTIVE MANUAL (already loaded — do NOT call lookup_manual again): {manual.get('brand','')} {manual.get('model','')} — {manual.get('title','')}\nCurrent step: {sess.current_step}\n"
 
-                # Load previous tool runs so Gemini doesn't repeat them
-                tool_runs = await SessionStore.get_tool_runs(db, session_id, limit=10)
-                if tool_runs:
-                    history_context += "\n\nPREVIOUS TOOL CALLS (already executed — do NOT repeat):\n"
-                    for tr in tool_runs:
-                        if tr.tool_name == "lookup_manual":
-                            out = tr.output_data or {}
-                            if out.get("selected_manual_id"):
-                                history_context += f"- lookup_manual: Found {out.get('manual_summary','')}\n"
-                            else:
-                                history_context += f"- lookup_manual: No manual found for {tr.input_data}. Used general knowledge instead.\n"
-                    history_context += "Do NOT call these tools again unless the user mentions a DIFFERENT device.\n"
+                    # Load previous tool runs so Gemini doesn't repeat them
+                    tool_runs = await SessionStore.get_tool_runs(db, session_id, limit=10)
+                    if tool_runs:
+                        history_context += "\n\nPREVIOUS TOOL CALLS (already executed — do NOT repeat):\n"
+                        for tr in tool_runs:
+                            if tr.tool_name == "lookup_manual":
+                                out = tr.output_data or {}
+                                if out.get("selected_manual_id"):
+                                    history_context += f"- lookup_manual: Found {out.get('manual_summary','')}\n"
+                                else:
+                                    history_context += f"- lookup_manual: No manual found for {tr.input_data}. Used general knowledge instead.\n"
+                        history_context += "Do NOT call these tools again unless the user mentions a DIFFERENT device.\n"
 
         full_prompt = system_prompt + history_context + active_manual_context
-        full_prompt += (
-            "\n\nCAMERA AVAILABILITY: At session start no camera frame has been received yet. "
-            "Until you receive image frames, do not claim you can see the scene. "
-            "If the user asks what you see before frames arrive, say: "
-            "\"I can't see anything right now — please turn on the camera or check camera access in settings.\""
-        )
+        if text_only_mode:
+            full_prompt += (
+                "\n\nSESSION MODE: Voice input, chat transcript output. There is no camera, no manual lookup, and no persona selection. "
+                "The frontend will not play assistant audio; it will show only your output transcript. "
+                "The server may suppress turns that look like the user is reciting your previous answer."
+            )
+        else:
+            full_prompt += (
+                "\n\nCAMERA AVAILABILITY: At session start no camera frame has been received yet. "
+                "Until you receive image frames, do not claim you can see the scene. "
+                "If the user asks what you see before frames arrive, say: "
+                "\"I can't see anything right now — please turn on the camera or check camera access in settings.\""
+            )
         if language.lower().startswith("en"):
             full_prompt += (
                 "\n\nLANGUAGE: The client requested English. Speak only in English and keep all output transcription in English. "
@@ -401,17 +517,26 @@ async def ws_session(websocket: WebSocket):
             max_size=16 * 1024 * 1024,
         )
 
+        generation_config = {
+            "response_modalities": ["AUDIO"],
+            "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_id if not text_only_mode else "Puck"}}},
+        }
+        setup_payload = {
+            "model": f"models/{MODEL_ID}",
+            "generation_config": generation_config,
+            "system_instruction": {"parts": [{"text": full_prompt}]},
+            "input_audio_transcription": {},
+        }
+        if text_only_mode:
+            setup_payload["tools"] = []
+            setup_payload["output_audio_transcription"] = {}
+        else:
+            setup_payload["tools"] = [{"function_declarations": [LOOKUP_MANUAL_DECL]}]
+            setup_payload["output_audio_transcription"] = {}
+
         setup = {
             "setup": {
-                "model": f"models/{MODEL_ID}",
-                "generation_config": {
-                    "response_modalities": ["AUDIO"],
-                    "speech_config": {"voice_config": {"prebuilt_voice_config": {"voice_name": voice_id}}}
-                },
-                "system_instruction": {"parts": [{"text": full_prompt}]},
-                "tools": [{"function_declarations": [LOOKUP_MANUAL_DECL]}],
-                "input_audio_transcription": {},
-                "output_audio_transcription": {}
+                **setup_payload,
             }
         }
         await gemini_ws.send(json.dumps(setup))
@@ -419,7 +544,7 @@ async def ws_session(websocket: WebSocket):
         logger.info(f"[{session_id}] Gemini ready")
 
         await websocket.send_json({"type": "assistant.state", "state": "listening"})
-        await websocket.send_json({"type": "status", "message": "Connected! Start speaking..."})
+        await websocket.send_json({"type": "status", "message": "Listening for a coding question..." if text_only_mode else "Connected! Start speaking..."})
 
         # Send session state to client if resuming
         if resume_id:
@@ -429,7 +554,7 @@ async def ws_session(websocket: WebSocket):
                     await websocket.send_json({"type": "session.state", "data": state})
 
         # Trigger greeting — tell Gemini to introduce itself
-        if not resume_id:
+        if not resume_id and not text_only_mode:
             greet_msg = {
                 "clientContent": {
                     "turns": [{"role": "user", "parts": [{"text": "Session just started. Greet the user briefly in English and ask what device they need help with. Keep it to one natural sentence."}]}],
@@ -440,11 +565,14 @@ async def ws_session(websocket: WebSocket):
             logger.info(f"[{session_id}] Greeting trigger sent")
 
         # ─── Gemini → Client ───
+        last_assistant_answer = ""
+
         async def recv_gemini():
-            nonlocal alive, ai_speaking
+            nonlocal alive, ai_speaking, last_assistant_answer
             user_buf = ""
             asst_buf = ""
             manual_close_seen = False
+            assistant_text_part_seen = False
             try:
                 async for raw_msg in gemini_ws:
                     if not alive:
@@ -472,28 +600,41 @@ async def ws_session(websocket: WebSocket):
                         # Audio
                         mt = sc.get("modelTurn")
                         if mt and mt.get("parts"):
-                            ai_speaking = True
-                            await websocket.send_json({"type": "assistant.state", "state": "speaking"})
-                            for p in mt["parts"]:
-                                idata = p.get("inlineData")
-                                if idata and idata.get("data"):
-                                    await websocket.send_json({"type": "audio", "data": idata["data"]})
+                            if text_only_mode:
+                                await websocket.send_json({"type": "assistant.state", "state": "thinking"})
+                                for p in mt["parts"]:
+                                    text_part = p.get("text")
+                                    if text_part:
+                                        assistant_text_part_seen = True
+                                        asst_buf += text_part
+                            else:
+                                ai_speaking = True
+                                await websocket.send_json({"type": "assistant.state", "state": "speaking"})
+                                for p in mt["parts"]:
+                                    idata = p.get("inlineData")
+                                    if idata and idata.get("data"):
+                                        await websocket.send_json({"type": "audio", "data": idata["data"]})
 
                         # Input transcription
                         itx = sc.get("inputTranscription")
                         if itx and itx.get("text"):
                             user_buf += itx["text"]
                             nudge.user_spoke()
-                            await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
-                            if not manual_close_seen and _manual_close_requested(user_buf):
+                            if not text_only_mode:
+                                await websocket.send_json({"type": "transcription", "role": "user", "text": itx["text"]})
+                            if not text_only_mode and not manual_close_seen and _manual_close_requested(user_buf):
                                 manual_close_seen = True
                                 await close_active_manual(session_id, websocket, gemini_ws, reason="voice request")
 
                         # Output transcription
                         otx = sc.get("outputTranscription")
                         if otx and otx.get("text"):
-                            asst_buf += otx["text"]
-                            await websocket.send_json({"type": "transcription", "role": "assistant", "text": otx["text"]})
+                            if text_only_mode:
+                                if not assistant_text_part_seen:
+                                    asst_buf += otx["text"]
+                            else:
+                                asst_buf += otx["text"]
+                                await websocket.send_json({"type": "transcription", "role": "assistant", "text": otx["text"]})
 
                         # Grounding (Google Search)
                         gm = sc.get("groundingMetadata")
@@ -505,33 +646,59 @@ async def ws_session(websocket: WebSocket):
 
                         if sc.get("interrupted"):
                             ai_speaking = False
+                            if text_only_mode:
+                                asst_buf = ""
+                                assistant_text_part_seen = False
                             await websocket.send_json({"type": "interrupted"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
 
                         if sc.get("turnComplete"):
                             ai_speaking = False
                             logger.info(f"[{session_id}] Turn complete")
+                            if text_only_mode:
+                                user_text = user_buf.strip()
+                                assistant_text = asst_buf.strip()
+                                is_recitation, metrics = _is_probable_answer_recitation(user_text, last_assistant_answer)
+                                is_actionable = _is_question_or_coding_request(user_text)
+
+                                if user_text and is_recitation:
+                                    logger.info(f"[{session_id}] Suppressed likely answer recitation: metrics={metrics} text={user_text[:120]!r}")
+                                    await websocket.send_json({"type": "recitation.ignored"})
+                                elif user_text and is_actionable:
+                                    await websocket.send_json({"type": "transcription", "role": "user", "text": user_text, "final": True})
+                                    if assistant_text:
+                                        await websocket.send_json({"type": "transcription", "role": "assistant", "text": assistant_text, "final": True})
+                                        last_assistant_answer = assistant_text
+                                    async with AsyncSessionLocal() as db:
+                                        await SessionStore.add_turn(db, session_id, "user", user_text)
+                                        if assistant_text:
+                                            await SessionStore.add_turn(db, session_id, "assistant", assistant_text)
+                                elif user_text:
+                                    logger.info(f"[{session_id}] Suppressed non-question voice turn: {user_text[:120]!r}")
+                                    await websocket.send_json({"type": "non_question.ignored"})
+                            else:
+                                # Persist turns
+                                async with AsyncSessionLocal() as db:
+                                    if user_buf.strip():
+                                        await SessionStore.add_turn(db, session_id, "user", user_buf.strip())
+                                    if asst_buf.strip():
+                                        await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
+                                        # Check if assistant mentioned completing a step — advance step counter
+                                        step_keywords = ["next step", "step done", "move on to", "that's done", "let's proceed", "now we need to", "good, now"]
+                                        lower_asst = asst_buf.lower()
+                                        if any(kw in lower_asst for kw in step_keywords):
+                                            sess = await SessionStore.get_session(db, session_id)
+                                            if sess:
+                                                new_step = (sess.current_step or 0) + 1
+                                                await SessionStore.update_session(db, session_id, current_step=new_step)
+                                                await websocket.send_json({"type": "step.update", "step": new_step})
+                                                logger.info(f"[{session_id}] Step advanced to {new_step}")
                             await websocket.send_json({"type": "turn_complete"})
                             await websocket.send_json({"type": "assistant.state", "state": "listening"})
-                            # Persist turns
-                            async with AsyncSessionLocal() as db:
-                                if user_buf.strip():
-                                    await SessionStore.add_turn(db, session_id, "user", user_buf.strip())
-                                if asst_buf.strip():
-                                    await SessionStore.add_turn(db, session_id, "assistant", asst_buf.strip())
-                                    # Check if assistant mentioned completing a step — advance step counter
-                                    step_keywords = ["next step", "step done", "move on to", "that's done", "let's proceed", "now we need to", "good, now"]
-                                    lower_asst = asst_buf.lower()
-                                    if any(kw in lower_asst for kw in step_keywords):
-                                        sess = await SessionStore.get_session(db, session_id)
-                                        if sess:
-                                            new_step = (sess.current_step or 0) + 1
-                                            await SessionStore.update_session(db, session_id, current_step=new_step)
-                                            await websocket.send_json({"type": "step.update", "step": new_step})
-                                            logger.info(f"[{session_id}] Step advanced to {new_step}")
                             user_buf = ""
                             asst_buf = ""
                             manual_close_seen = False
+                            assistant_text_part_seen = False
 
                     except Exception as e:
                         logger.error(f"[{session_id}] Gemini msg err: {e}")
@@ -571,6 +738,8 @@ async def ws_session(websocket: WebSocket):
                     }))
 
                 elif t == "video":
+                    if text_only_mode:
+                        continue
                     frame_count += 1
                     if camera_status != "on":
                         camera_status = "on"
@@ -703,9 +872,9 @@ async def ws_session(websocket: WebSocket):
                 elif t == "text":
                     txt = msg.get("content", "")
                     if txt:
-                        if _manual_close_requested(txt):
+                        if not text_only_mode and _manual_close_requested(txt):
                             await close_active_manual(session_id, websocket, gemini_ws, reason="text request")
-                        if camera_status != "on" or frame_count == 0:
+                        if not text_only_mode and (camera_status != "on" or frame_count == 0):
                             txt = (
                                 "[CAMERA_STATUS: unavailable] No camera frame is currently available. "
                                 "If this message asks what you see, say you can't see anything right now and ask the user to turn on the camera or check camera access in settings. "
@@ -717,9 +886,12 @@ async def ws_session(websocket: WebSocket):
                         }))
 
                 elif t == "manual.close":
-                    await close_active_manual(session_id, websocket, gemini_ws, reason="client request")
+                    if not text_only_mode:
+                        await close_active_manual(session_id, websocket, gemini_ws, reason="client request")
 
                 elif t == "camera_status":
+                    if text_only_mode:
+                        continue
                     state = msg.get("state", "unavailable")
                     reason = msg.get("reason", "")
                     if state not in {"on", "off", "unavailable"}:
