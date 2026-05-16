@@ -362,8 +362,8 @@ export default function RepairAssistant() {
           <div className="ra-session-layout" data-testid="session-layout">
             <section className="ra-chat-section" data-testid="transcript-panel">
               <div className="ra-transcript-messages">
-                {transcript.map((turn, index) => (
-                  <div key={`${turn.role}-${index}`} className={`ra-message ${turn.role}`}>
+                {transcript.slice().reverse().map((turn, i) => (
+                  <div key={`${turn.role}-${transcript.length - 1 - i}`} className={`ra-message ${turn.role}`}>
                     <span className="ra-message-role">{turn.role === 'user' ? 'YOU' : turn.role === 'system' ? 'SYS' : 'AI'}</span>
                     <span className="ra-message-content">{turn.text}</span>
                   </div>

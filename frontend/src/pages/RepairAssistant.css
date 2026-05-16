@@ -15,10 +15,18 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Prevent any outer page scroll — only the message list scrolls internally */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 .repair-assistant {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* dynamic viewport — accounts for mobile browser chrome */
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -180,11 +188,11 @@
   background: var(--bg);
 }
 
-/* column-reverse: newest message sits at the visual top; older ones push down */
+/* Reversed array rendered top-to-bottom: newest at top, scroll locked there by default */
 .ra-transcript-messages {
   flex: 1;
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   gap: 6px;
   overflow-y: auto;
   padding: 14px 16px;
