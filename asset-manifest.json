@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/vision-voice-agent/static/css/main.98481ec4.css",
+    "main.js": "/vision-voice-agent/static/js/main.9533eaf4.js",
+    "index.html": "/vision-voice-agent/index.html",
+    "main.98481ec4.css.map": "/vision-voice-agent/static/css/main.98481ec4.css.map",
+    "main.9533eaf4.js.map": "/vision-voice-agent/static/js/main.9533eaf4.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.98481ec4.css",
+    "static/js/main.9533eaf4.js"
+  ]
+}
