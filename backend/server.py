@@ -835,20 +835,23 @@ async def run_coding_helper_session(
             "type": "session.update",
             "session": {
                 "type": "transcription",
-                "input_audio_format": "pcm16",
-                "input_audio_transcription": {
-                    "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
-                    "language": "en" if language.lower().startswith("en") else language.split("-")[0],
-                    "prompt": "Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2, API, backend, frontend, deployment, branch, and terminal commands.",
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": CODING_HELPER_STT_SAMPLE_RATE},
+                        "transcription": {
+                            "model": OPENAI_REALTIME_TRANSCRIPTION_MODEL,
+                            "language": "en" if language.lower().startswith("en") else language.split("-")[0],
+                            "prompt": "Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2, API, backend, frontend, deployment, branch, and terminal commands.",
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": CODING_HELPER_STT_VAD_THRESHOLD,
+                            "prefix_padding_ms": 240,
+                            "silence_duration_ms": CODING_HELPER_STT_SILENCE_MS,
+                        },
+                        "noise_reduction": {"type": "near_field"},
+                    }
                 },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": CODING_HELPER_STT_VAD_THRESHOLD,
-                    "prefix_padding_ms": 240,
-                    "silence_duration_ms": CODING_HELPER_STT_SILENCE_MS,
-                },
-                "input_audio_noise_reduction": {"type": "near_field"},
-                "include": [],
             },
         }
         await openai_ws.send(json.dumps(setup_payload))
