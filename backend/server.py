@@ -48,7 +48,7 @@ OPENAI_REALTIME_TRANSCRIPTION_MODEL = os.environ.get(
 CODING_HELPER_STT_SAMPLE_RATE = int(os.environ.get("CODING_HELPER_STT_SAMPLE_RATE", "24000"))
 CODING_HELPER_STT_SILENCE_MS = int(os.environ.get("CODING_HELPER_STT_SILENCE_MS", "420"))
 CODING_HELPER_STT_VAD_THRESHOLD = float(os.environ.get("CODING_HELPER_STT_VAD_THRESHOLD", "0.45"))
-CODING_HELPER_CLIENT_VAD_COMMIT = os.environ.get("CODING_HELPER_CLIENT_VAD_COMMIT", "1").lower() not in {"0", "false", "no"}
+CODING_HELPER_CLIENT_VAD_COMMIT = os.environ.get("CODING_HELPER_CLIENT_VAD_COMMIT", "0").lower() not in {"0", "false", "no"}
 INPUT_SAMPLE_RATE = 16000
 GEMINI_WS_URL = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={GEMINI_API_KEY}"
 
@@ -91,15 +91,65 @@ RECITATION_STOPWORDS = {
     "with", "you", "your",
 }
 
-QUESTION_OR_REQUEST_RE = re.compile(
+CODING_TOPIC_RE = re.compile(
     r"\b("
-    r"how|what|why|where|when|which|who|can|could|should|would|do|does|did|"
-    r"is|are|will|explain|tell me|help me|show me|fix|debug|write|create|"
-    r"make|implement|build|review|check|compare|refactor|run|install|deploy|"
-    r"error|exception|bug|issue|failing|failed|crash|code|function|class|api|"
-    r"backend|frontend|react|javascript|typescript|python|swift|xcode|ios|git|"
-    r"github|aws|ec2|netlify|database|server|terminal|command"
+    r"code|function|class|api|backend|frontend|react|javascript|typescript|"
+    r"python|swift|xcode|ios|git|github|aws|ec2|netlify|database|server|"
+    r"terminal|command|node|npm|pip|docker|kubernetes|sql|websocket|deploy|"
+    r"deployment|branch|repo|repository|bug|error|exception|crash|"
+    r"list|tuple|array|dict|dictionary|object|closure|promise|async|await|"
+    r"loop|variable|algorithm|data structure|html|css|tailwind|nextjs|vite|"
+    r"vue|angular|svelte|express|fastapi|django|flask|firebase|supabase|"
+    r"postgres|mysql|mongodb|redis|cache|auth|oauth|jwt|endpoint|http|https|"
+    r"rest|graphql|lambda|s3|vercel|nginx|linux|ssh"
     r")\b",
+    re.IGNORECASE,
+)
+
+QUESTION_START_RE = re.compile(
+    r"^\s*(how|what|why|where|when|which|who|can|could|should|would|do|does|did|"
+    r"is|are|will|difference between)\b",
+    re.IGNORECASE,
+)
+
+REQUEST_START_RE = re.compile(
+    r"^\s*(explain|tell me|help me|show me|fix|debug|write|create|make|"
+    r"implement|build|review|check|compare|refactor|run|install|deploy|"
+    r"define|describe)\b",
+    re.IGNORECASE,
+)
+
+INTENT_REQUEST_RE = re.compile(
+    r"\b(i\s+(need|want|have|am trying|m trying|would like)\s+to|"
+    r"i\s+need\s+help|help\s+me|can\s+you|could\s+you|please)\b",
+    re.IGNORECASE,
+)
+
+ASSISTANT_ECHO_RE = re.compile(
+    r"\b("
+    r"how can i (assist|help) you|what can i help you with|"
+    r"i(?:'m| am)? ready to (assist|help)|ready to assist|ready to help|"
+    r"sure[, ]+(?:i(?:'m| am)|i can) (?:ready to )?(?:assist|help)|"
+    r"let me know how i can help|please provide (?:your|the) "
+    r"(?:coding question|question|code|text|details|snippet)|"
+    r"provide your first question|i can assist with|"
+    r"do you need help with anything else|please subscribe"
+    r")\b",
+    re.IGNORECASE,
+)
+
+STT_PROMPT_LEAK_RE = re.compile(
+    r"(###|"
+    r"coding assistant dictation|"
+    r"you will receive additional context|"
+    r"separated by ### delimiters|"
+    r"do not reply to the context|"
+    r"do not include it in the final transcription|"
+    r"current user question from voice transcription|"
+    r"answer now keep it concise|"
+    r"expect terms like python|"
+    r"rules do not answer coding questions)"
+    r"",
     re.IGNORECASE,
 )
 
@@ -130,16 +180,37 @@ def _token_cosine(left: List[str], right: List[str]) -> float:
     return numerator / (left_norm * right_norm)
 
 
+def _is_stt_artifact(text: str) -> bool:
+    normalized = _compact_text(text)
+    if not normalized:
+        return True
+    if STT_PROMPT_LEAK_RE.search(text):
+        return True
+    if ASSISTANT_ECHO_RE.search(normalized):
+        return True
+    return False
+
+
 def _is_question_or_coding_request(text: str) -> bool:
     normalized = _compact_text(text)
     if not normalized:
         return False
-    if "?" in text:
-        return True
-    if QUESTION_OR_REQUEST_RE.search(normalized):
+    if _is_stt_artifact(text):
+        return False
+    has_coding_topic = bool(CODING_TOPIC_RE.search(normalized))
+    question_like = bool(QUESTION_START_RE.search(normalized)) or "?" in text
+    request_like = bool(REQUEST_START_RE.search(normalized)) or bool(INTENT_REQUEST_RE.search(normalized))
+    if question_like:
+        return has_coding_topic or re.search(r"\b(coding|programming|software|app|website)\b", normalized, re.IGNORECASE) is not None
+    if request_like and has_coding_topic:
         return True
     tokens = _content_tokens(normalized)
-    return len(tokens) >= 4 and any(token in tokens for token in {"npm", "pip", "git", "docker", "server", "route", "branch"})
+    return (
+        len(tokens) >= 4
+        and has_coding_topic
+        and any(token in tokens for token in {"npm", "pip", "git", "docker", "server", "route", "branch", "deploy"})
+        and not re.search(r"^\s*(you|it|that|this)\b", normalized)
+    )
 
 
 def _is_probable_answer_recitation(user_text: str, last_answer: str) -> Tuple[bool, Dict[str, float]]:
@@ -721,13 +792,12 @@ async def run_coding_helper_session(
         if not user_text:
             return
 
-        await websocket.send_json({
-            "type": "transcription",
-            "role": "user",
-            "text": user_text,
-            "final": True,
-            "replace": replace_transcript,
-        })
+        if _is_stt_artifact(user_text):
+            logger.info(f"[{session_id}] Suppressed STT artifact: {user_text[:120]!r}")
+            await websocket.send_json({"type": "non_question.ignored"})
+            await websocket.send_json({"type": "assistant.state", "state": "listening"})
+            await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
+            return
 
         is_recitation, metrics = _is_probable_answer_recitation(user_text, last_assistant_answer)
         is_actionable = _is_question_or_coding_request(user_text)
@@ -746,6 +816,13 @@ async def run_coding_helper_session(
             await websocket.send_json({"type": "status", "message": "Listening for a coding question..."})
             return
 
+        await websocket.send_json({
+            "type": "transcription",
+            "role": "user",
+            "text": user_text,
+            "final": True,
+            "replace": replace_transcript,
+        })
         await websocket.send_json({"type": "assistant.state", "state": "thinking"})
         await websocket.send_json({"type": "status", "message": "Answering..."})
         async with AsyncSessionLocal() as db:
@@ -770,8 +847,9 @@ async def run_coding_helper_session(
                     if event_type == "error":
                         error = data.get("error") or {}
                         message = str(error.get("message") or "OpenAI realtime transcription error")
-                        if "empty" in message.lower() and "buffer" in message.lower():
-                            logger.debug(f"[{session_id}] Ignoring empty local VAD commit: {message}")
+                        message_lower = message.lower()
+                        if "buffer" in message_lower and ("empty" in message_lower or "too small" in message_lower):
+                            logger.debug(f"[{session_id}] Ignoring tiny local VAD commit: {message}")
                             continue
                         logger.error(f"[{session_id}] OpenAI STT error: {message}")
                         await websocket.send_json({"type": "error", "message": message})
@@ -792,7 +870,6 @@ async def run_coding_helper_session(
                         delta = data.get("delta") or ""
                         if delta:
                             item_buffers[item_id] = f"{item_buffers.get(item_id, '')}{delta}"
-                            await websocket.send_json({"type": "transcription", "role": "user", "text": delta, "final": False})
                         continue
 
                     if event_type == "conversation.item.input_audio_transcription.completed":

@@ -1,9 +1,35 @@
-from server import _clean_voice_text, _is_probable_answer_recitation, _is_question_or_coding_request, _merge_voice_fragment
+from server import (
+    _clean_voice_text,
+    _is_probable_answer_recitation,
+    _is_question_or_coding_request,
+    _is_stt_artifact,
+    _merge_voice_fragment,
+)
 
 
 def test_coding_question_is_actionable():
     assert _is_question_or_coding_request("How do I fix this React useEffect loop?")
     assert _is_question_or_coding_request("debug the backend websocket error")
+    assert _is_question_or_coding_request("I need to create a new branch for the feature I'm working on.")
+    assert _is_question_or_coding_request("Can you tell me more about AWS EC2?")
+    assert _is_question_or_coding_request("What is a closure?")
+    assert _is_question_or_coding_request("difference between list and tuple")
+
+
+def test_statement_with_coding_terms_is_not_automatically_actionable():
+    assert not _is_question_or_coding_request("You can use the AWS EC2 service to deploy your API backend.")
+    assert not _is_question_or_coding_request("Python is a high-level interpreted programming language.")
+    assert not _is_question_or_coding_request("What can I help you with today?")
+
+
+def test_stt_prompt_leak_is_artifact():
+    assert _is_stt_artifact(
+        "context: ### Coding assistant dictation. Expect terms like Python, JavaScript, React, Swift, Xcode, GitHub, AWS, EC2. ###"
+    )
+    assert _is_stt_artifact(
+        "You will receive additional context/instructions (separated by ### delimiters) from the user."
+    )
+    assert _is_stt_artifact("Sure, I'm ready to assist with any coding-related queries or tasks you have.")
 
 
 def test_answer_recitation_is_detected():
