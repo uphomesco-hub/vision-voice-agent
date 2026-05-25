@@ -50,10 +50,12 @@ SAM2_CHECKPOINT = os.environ.get(
 )
 SAM2_CONFIG = os.environ.get("HUD_SAM2_CONFIG", "configs/sam2.1/sam2.1_hiera_t.yaml")
 SAM2_ENABLED = os.environ.get("HUD_SAM2_ENABLED", "1") != "0"
+SAM2_VOS_OPTIMIZED = os.environ.get("HUD_SAM2_VOS_OPTIMIZED", "0") == "1"
 GROUNDING_BACKEND = os.environ.get("HUD_GROUNDING_BACKEND", "grounding_dino").lower()
 GROUNDING_DINO_MODEL = os.environ.get("HUD_GROUNDING_DINO_MODEL", "IDEA-Research/grounding-dino-tiny")
 FLORENCE2_MODEL = os.environ.get("HUD_FLORENCE2_MODEL", "microsoft/Florence-2-base-ft")
 FLORENCE2_ENABLED = os.environ.get("HUD_FLORENCE2_ENABLED", "1") != "0"
+FLORENCE2_FALLBACK = os.environ.get("HUD_FLORENCE2_FALLBACK", "1") != "0"
 DINOX_ENABLED = os.environ.get("HUD_DINOX_ENABLED", "0") == "1"
 DINOX_MODEL = os.environ.get("HUD_DINOX_MODEL", "DINO-X-1.0")
 DINOX_API_TOKEN = os.environ.get("DINOX_API_TOKEN") or os.environ.get("DDS_API_TOKEN") or os.environ.get("DINOX_API_KEY", "")
@@ -62,6 +64,8 @@ GROUNDING_TEXT_THRESHOLD = float(os.environ.get("HUD_GROUNDING_TEXT_THRESHOLD", 
 HUD_TILED_GROUNDING = os.environ.get("HUD_TILED_GROUNDING", "1") != "0"
 HUD_TILE_SIZE = int(os.environ.get("HUD_TILE_SIZE", "512"))
 HUD_TILE_OVERLAP = float(os.environ.get("HUD_TILE_OVERLAP", "0.25"))
+GROUNDED_SAM2_ENABLED = os.environ.get("HUD_GROUNDED_SAM2_ENABLED", "1") != "0"
+GROUNDED_SAM2_MAX_CANDIDATES = int(os.environ.get("HUD_GROUNDED_SAM2_MAX_CANDIDATES", "4"))
 REPAIR_DETECTOR_MODEL = os.environ.get("HUD_REPAIR_DETECTOR_MODEL", "")
 
 _sam2_lock = threading.Lock()
@@ -470,6 +474,32 @@ def _negative_prompt_ring(geometry: Dict[str, float], positives: List[Dict[str, 
     return [{"x": _clamp01(p["x"], cx), "y": _clamp01(p["y"], cy), "label": 0} for p in candidates]
 
 
+def _initial_prompt_points(geometry: Dict[str, float], label: str = "", target_hint: str = "") -> List[Dict[str, float]]:
+    g = _normal_geometry(geometry)
+    if not g:
+        return []
+    cx = g["x"] + g["width"] / 2
+    cy = g["y"] + g["height"] / 2
+    positives = [{"x": cx, "y": cy, "label": 1}]
+    if not _is_tiny_target(label, target_hint) and _geometry_area(g) >= 0.008:
+        positives.extend([
+            {"x": g["x"] + g["width"] * 0.34, "y": cy, "label": 1},
+            {"x": g["x"] + g["width"] * 0.66, "y": cy, "label": 1},
+        ])
+    return positives + _negative_prompt_ring(g, positives)
+
+
+def _public_candidate(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    public = {}
+    for key, value in candidate.items():
+        if key == "segmentation":
+            seg = value if isinstance(value, dict) else {}
+            public[key] = {k: v for k, v in seg.items() if k != "contour"}
+        elif key not in ("mask_contour", "contour"):
+            public[key] = value
+    return public
+
+
 def _refresh_is_safe(marker: Dict[str, Any], new_geometry: Dict[str, float], segmentation: Dict[str, Any]):
     old_geometry = _normal_geometry(marker.get("geometry"))
     seed_geometry = _normal_geometry(marker.get("seed_geometry") or marker.get("model_geometry"))
@@ -848,6 +878,70 @@ def _run_repair_detector(img: Image.Image, target_hint: str) -> List[Dict[str, A
         return [{"source": "repair_detector", "error": str(exc), "score": 0.0}]
 
 
+def _grounded_sam2_candidate_score(
+    candidate: Dict[str, Any],
+    segmentation: Dict[str, Any],
+    target_hint: str,
+) -> float:
+    geom = _normal_geometry(candidate.get("geometry"))
+    contour = segmentation.get("contour") or []
+    mask_box = _bbox_from_contour(contour)
+    detector_score = float(candidate.get("score", 0) or 0)
+    mask_score = float(segmentation.get("confidence", 0) or 0)
+    iou = _geometry_iou(geom, mask_box)
+    fill = float(segmentation.get("fill_ratio", 0.5) or 0.5)
+    score = detector_score * 0.55 + mask_score * 0.32 + min(1.0, iou) * 0.13
+    if fill > 2.1:
+        score -= min(0.24, (fill - 2.1) * 0.08)
+    if _is_tiny_target(candidate.get("label", ""), target_hint):
+        area = _geometry_area(mask_box or geom)
+        if area > 0.04:
+            score -= 0.22
+    return round(max(0.0, min(0.99, score)), 4)
+
+
+def _refine_candidates_with_grounded_sam2(
+    raw_b64: str,
+    candidates: List[Dict[str, Any]],
+    target_hint: str,
+) -> List[Dict[str, Any]]:
+    if not GROUNDED_SAM2_ENABLED or not raw_b64 or not candidates:
+        return candidates
+    refined: List[Dict[str, Any]] = []
+    for cand in candidates[:max(1, GROUNDED_SAM2_MAX_CANDIDATES)]:
+        geom = _normal_geometry(cand.get("geometry"))
+        if not geom:
+            continue
+        seg = _segment_contour_sam2(
+            raw_b64,
+            geom,
+            target_hint=target_hint,
+            label=str(cand.get("label") or ""),
+        )
+        contour = seg.get("contour") or []
+        refined_geom = _bbox_from_contour(contour) or geom
+        if contour:
+            cand = {
+                **cand,
+                "geometry": refined_geom,
+                "detector_geometry": geom,
+                "mask_contour": contour,
+                "segmentation": {k: v for k, v in seg.items() if k != "contour"},
+                "score": _grounded_sam2_candidate_score(cand, seg, target_hint),
+                "source": f"{cand.get('source', 'detector')}+sam2",
+            }
+        else:
+            cand = {
+                **cand,
+                "segmentation": {k: v for k, v in seg.items() if k != "contour"},
+                "score": round(float(cand.get("score", 0) or 0) * 0.82, 4),
+            }
+        refined.append(cand)
+    if len(candidates) > len(refined):
+        refined.extend(candidates[len(refined):])
+    return _dedupe_candidates(refined, max_count=8)
+
+
 async def _ground_target_with_detector(raw_b64: str, args: Dict[str, Any]) -> Dict[str, Any]:
     img_arr = _decode_frame(raw_b64)
     if img_arr is None:
@@ -865,9 +959,12 @@ async def _ground_target_with_detector(raw_b64: str, args: Dict[str, Any]) -> Di
             candidates.extend(await asyncio.to_thread(_run_tiled_grounding, img, target))
     if GROUNDING_BACKEND in ("florence2", "florence", "auto", "grounded"):
         candidates.extend(await asyncio.to_thread(_run_florence2_on_image, img, target, "florence2"))
+    elif FLORENCE2_FALLBACK and not any(c.get("geometry") and not c.get("error") for c in candidates):
+        candidates.extend(await asyncio.to_thread(_run_florence2_on_image, img, target, "florence2_fallback"))
 
     candidates = [c for c in candidates if c.get("geometry") and not c.get("error")]
     candidates = _dedupe_candidates(candidates)
+    candidates = await asyncio.to_thread(_refine_candidates_with_grounded_sam2, raw_b64, candidates, target)
     if not candidates:
         return {
             "found": False,
@@ -877,15 +974,23 @@ async def _ground_target_with_detector(raw_b64: str, args: Dict[str, Any]) -> Di
         }
     best = candidates[0]
     ambiguous = len(candidates) > 1 and abs(float(candidates[0].get("score", 0)) - float(candidates[1].get("score", 0))) < 0.08
+    segmentation = best.get("segmentation") if isinstance(best.get("segmentation"), dict) else {}
     return {
         "found": True,
         "source": best.get("source", "detector"),
         "label": best.get("label") or target,
         "geometry": best.get("geometry"),
+        "detector_geometry": best.get("detector_geometry"),
+        "mask_contour": best.get("mask_contour") or [],
+        "segmentation": {
+            **segmentation,
+            "provider": "grounded_sam2",
+            "grounding_source": best.get("source", "detector"),
+        } if segmentation else {},
         "anchor_point": _anchor_from_geometry(best.get("geometry")),
         "confidence": float(best.get("score", 0.45) or 0.45),
         "notes": "detector grounding",
-        "candidates": candidates,
+        "candidates": [_public_candidate(c) for c in candidates],
         "ambiguous": ambiguous,
     }
 
@@ -937,7 +1042,15 @@ def _get_sam2_video_predictor():
             from sam2.build_sam import build_sam2_video_predictor
 
             _sam2_device = "mps" if torch.backends.mps.is_available() else "cpu"
-            _sam2_video_predictor = build_sam2_video_predictor(SAM2_CONFIG, SAM2_CHECKPOINT, device=_sam2_device)
+            try:
+                _sam2_video_predictor = build_sam2_video_predictor(
+                    SAM2_CONFIG,
+                    SAM2_CHECKPOINT,
+                    device=_sam2_device,
+                    vos_optimized=SAM2_VOS_OPTIMIZED,
+                )
+            except TypeError:
+                _sam2_video_predictor = build_sam2_video_predictor(SAM2_CONFIG, SAM2_CHECKPOINT, device=_sam2_device)
             return _sam2_video_predictor
         except Exception as exc:
             _sam2_video_error = str(exc)
@@ -1073,6 +1186,8 @@ def _segment_contour_sam2(
     geometry: Dict[str, float],
     point_coords: Optional[List[Dict[str, float]]] = None,
     point_labels: Optional[List[int]] = None,
+    target_hint: str = "",
+    label: str = "",
 ) -> Dict[str, Any]:
     if not raw_b64:
         return {"provider": "sam2_unavailable", "error": "no frame"}
@@ -1100,9 +1215,18 @@ def _segment_contour_sam2(
         import torch
         points_np = None
         labels_np = None
+        prompt_points = point_coords
+        prompt_labels = point_labels
+        if not prompt_points:
+            initial = _initial_prompt_points(geometry, label, target_hint)
+            prompt_points = [{"x": p["x"], "y": p["y"]} for p in initial]
+            prompt_labels = [int(p.get("label", 1)) for p in initial]
         if point_coords:
-            points_np = np.array([[float(p["x"]) * width, float(p["y"]) * height] for p in point_coords], dtype=np.float32)
-            labels_np = np.array(point_labels or [1] * len(point_coords), dtype=np.int32)
+            points_np = np.array([[float(p["x"]) * width, float(p["y"]) * height] for p in prompt_points], dtype=np.float32)
+            labels_np = np.array(prompt_labels or [1] * len(prompt_points), dtype=np.int32)
+        elif prompt_points:
+            points_np = np.array([[float(p["x"]) * width, float(p["y"]) * height] for p in prompt_points], dtype=np.float32)
+            labels_np = np.array(prompt_labels or [1] * len(prompt_points), dtype=np.int32)
 
         with _sam2_lock:
             with torch.inference_mode():
@@ -1119,13 +1243,18 @@ def _segment_contour_sam2(
         contour_points = _mask_to_contour(masks[best_idx], width, height)
         if not contour_points:
             return {"provider": "sam2_empty", "score": float(scores[best_idx])}
+        mask_pixels = float(np.asarray(masks[best_idx] > 0).sum())
+        box_pixels = max(1.0, float((box[2] - box[0]) * (box[3] - box[1])))
+        fill_ratio = float(np.clip(mask_pixels / box_pixels, 0.0, 4.0))
         return {
             "provider": "sam2",
             "device": _sam2_device,
             "contour": contour_points,
             "confidence": round(float(scores[best_idx]), 3),
             "contour_points": len(contour_points),
-            "prompt_points": len(point_coords or []),
+            "prompt_points": len(prompt_points or []),
+            "prompt_type": "box_points_negative_ring" if prompt_points else "box",
+            "fill_ratio": round(fill_ratio, 3),
         }
     except Exception as exc:
         return {"provider": "sam2_error", "error": str(exc)}
@@ -1487,10 +1616,15 @@ async def run_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict[str,
         if grounded.get("label"):
             label = str(grounded["label"])[:36]
 
-    segmentation = await asyncio.to_thread(_segment_contour_from_box, raw_b64, geometry)
+    grounded_segmentation = grounded.get("segmentation") if isinstance(grounded.get("segmentation"), dict) else {}
+    grounded_contour = grounded.get("mask_contour") if isinstance(grounded.get("mask_contour"), list) else []
+    if grounded_contour:
+        segmentation = {**grounded_segmentation, "provider": grounded_segmentation.get("provider") or "grounded_sam2", "contour": grounded_contour}
+    else:
+        segmentation = await asyncio.to_thread(_segment_contour_from_box, raw_b64, geometry)
     contour = segmentation.get("contour") or _rectangle_contour(geometry)
     contour_bbox = _bbox_from_contour(contour)
-    if contour_bbox and segmentation.get("provider") in ("sam2", "opencv_grabcut"):
+    if contour_bbox and segmentation.get("provider") in ("sam2", "grounded_sam2", "opencv_grabcut"):
         geometry = contour_bbox
     confidence = max(confidence, float(segmentation.get("confidence", 0) or 0))
     marker_type = _marker_type_for(label, target_hint, geometry)
@@ -1529,10 +1663,13 @@ async def run_highlight_tool(session_id: str, args: Dict[str, Any]) -> Dict[str,
             "candidate_count": len(grounded.get("candidates") or []),
             "ambiguous": bool(grounded.get("ambiguous")),
             "grounding_error": grounded.get("error"),
+            "grounded_sam2_enabled": GROUNDED_SAM2_ENABLED,
+            "detector_geometry": grounded.get("detector_geometry"),
             "segmentation_provider": segmentation.get("provider"),
             "segmentation_device": segmentation.get("device"),
             "segmentation_confidence": segmentation.get("confidence"),
             "segmentation_fill_ratio": segmentation.get("fill_ratio"),
+            "segmentation_prompt_type": segmentation.get("prompt_type"),
             "contour_points": len(contour),
             "geometry_refined_from_mask": bool(contour_bbox),
         },
