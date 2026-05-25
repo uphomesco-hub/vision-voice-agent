@@ -69,6 +69,11 @@ agenthub/agents/youtube/db
 **/*.tar.gz
 **/*.tar
 **/*.tgz
+backend/models/*.pt
+backend/models/*.pth
+backend/hud_dataset/
+backend/hud_yolo_export/
+backend/hud_review_jobs/
 *.pack
 *.deb
 *.dylib

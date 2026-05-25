@@ -23,6 +23,7 @@ dnspython==2.8.0
 docstring_parser==0.18.0
 ecdsa==0.19.2
 email-validator==2.3.0
+einops==0.8.1
 eval_type_backport==0.3.1
 fastapi==0.115.12
 fastuuid==0.14.0
@@ -83,7 +84,15 @@ multidict==6.7.1
 mypy==1.20.0
 mypy_extensions==1.1.0
 nest-asyncio==1.6.0
-numpy==2.4.4
+numpy==2.2.6
+opencv-python-headless==4.12.0.88
+sam2==1.1.0
+torch==2.12.0
+torchvision==0.27.0
+ultralytics==8.3.235
+dds-cloudapi-sdk==0.5.3
+pycocotools==2.0.10
+timm==1.0.22
 oauthlib==3.3.1
 onnxruntime==1.24.4
 openai==2.32.0
@@ -147,9 +156,9 @@ stripe==15.0.1
 sympy==1.14.0
 tenacity==9.1.4
 tiktoken==0.12.0
-tokenizers==0.22.2
+tokenizers==0.21.4
 tqdm==4.67.3
-transformers==5.5.4
+transformers==4.49.0
 typer==0.24.1
 types-protobuf==7.34.1.20260408
 typing-inspection==0.4.2
